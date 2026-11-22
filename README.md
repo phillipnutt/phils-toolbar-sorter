@@ -11,8 +11,8 @@ bar that hides itself. It's one of Phil's mods, alongside
 [Phil's Part Hider](https://github.com/phillipnutt/phils-part-hider), and shares
 its look.
 
-- **The window:** the mod's toolbar button (three squares, the middle one lifted
-  in orange) opens a list of the buttons on the bar, in the bar's own order: left
+- **The window:** the mod's toolbar button (orange up-and-down arrows, with the
+  small rocket P all of Phil's mods carry) opens a list of the buttons on the bar, in the bar's own order: left
   to right at the Space Center, VAB, SPH and Tracking Station, top to bottom in
   flight. Each row shows the button's icon and its mod's name.
 - **Move a button:** drag its row up or down. The bar changes as you drop it.
@@ -68,8 +68,9 @@ and any other mod's button by the class and method it calls.
 
 MSBuild on `PhilsToolbarSorter.csproj`. It expects KSP at the default Steam
 location; pass `/p:KspDir="..."` for another install, and `/p:InstallToGame=true`
-to copy the build into the game (only with KSP closed). Everything in the window,
-the toolbar icon included, is drawn in code.
+to copy the build into the game (only with KSP closed). Everything in the window
+is drawn in code. The toolbar icon is `GameData/PhilsToolbarSorter/Textures/ToolbarIcon.png`,
+made from `art/ToolbarIcon.svg`.
 
 ## Testing
 

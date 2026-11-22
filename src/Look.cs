@@ -63,10 +63,12 @@ namespace PhilsToolbarSorter
                 return d;
             });
 
-            // The mod's mark: three buttons in a row, the middle one lifted out in orange.
-            // Logo is for the window's title bar; ToolbarIcon is the toolbar button itself.
+            // The window's title-bar mark: three buttons in a row, the middle one lifted out in orange.
             Logo = Mark(48, Color.Lerp(Ink3, Ink2, 0.3f), Amber, false);
-            ToolbarIcon = Mark(76, Hex(0xdfe3ea), Amber, true);
+            // The toolbar button: the look Phil's mods share (a small rocket P, orange up-and-down
+            // arrows), from Textures/ToolbarIcon.png. Read straight from the file, not through KSP's
+            // texture loader, so it isn't compressed. The drawn mark stands in if the file is missing.
+            ToolbarIcon = IconFile("Textures/ToolbarIcon.png") ?? Mark(76, Hex(0xdfe3ea), Amber, true);
 
             // KSP's divider, as a dash to repeat along a line.
             Dash = new Texture2D(10, 2, TextureFormat.ARGB32, false) { wrapMode = TextureWrapMode.Repeat, filterMode = FilterMode.Point, hideFlags = HideFlags.HideAndDontSave };
@@ -95,6 +97,23 @@ namespace PhilsToolbarSorter
                 Color c = aAmber > 0 ? middle : side;
                 return new Color(c.r, c.g, c.b, Mathf.Max(aSide, aAmber));
             });
+        }
+
+        // A picture shipped in the mod's folder, full quality (no compression, no mipmaps).
+        static Texture2D IconFile(string path)
+        {
+            string file = System.IO.Path.Combine(KSPUtil.ApplicationRootPath, "GameData/PhilsToolbarSorter/" + path);
+            try
+            {
+                if (!System.IO.File.Exists(file)) return null;
+                var t = new Texture2D(2, 2, TextureFormat.ARGB32, false) { wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Bilinear, hideFlags = HideFlags.HideAndDontSave };
+                if (ImageConversion.LoadImage(t, System.IO.File.ReadAllBytes(file), true)) return t;
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[PhilsToolbarSorter] Couldn't read {path}: {e.Message}");
+            }
+            return null;
         }
 
         // Signed distance to a square of half-size h with corner radius r.

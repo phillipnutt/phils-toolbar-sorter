@@ -11,3 +11,5 @@ First version.
 - One setup for every scene and every save, kept after a restart, in
   `PluginData/Toolbar.cfg`.
 - KSP's KSPedia and alarm clock buttons start hidden.
+- The toolbar button uses the icon look Phil's mods share: orange up-and-down
+  arrows with a small rocket P.

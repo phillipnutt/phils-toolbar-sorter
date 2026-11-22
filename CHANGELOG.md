@@ -13,6 +13,10 @@
   beside it. Folders can hold buttons from either side of the divider, and are
   per scene too.
 - Pointing at a button that's in a folder lights up its folder on the bar.
+- KSP's Contracts and Messages rows show their real (animated) icons, not a
+  gear.
+- Kerbalism's vessel-list button is named Kerbalism (it was "Assembly-CSharp")
+  and keeps its place, hidden or not, from setups made before.
 
 ## 0.1.0 (not released)
 

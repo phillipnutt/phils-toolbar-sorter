@@ -107,8 +107,10 @@ public class TBSCheck : MonoBehaviour
         CheckScene("Space Center, before");
         CheckUntouched("Space Center, before", Setup.SpaceCenter);
         yield return Shot("ksc-before");
+        CheckRenamed("Space Center");
         S.Window.Open();
         yield return new WaitForSeconds(1f);
+        yield return CheckPictures();
         List<ToolbarSorter.Row> rows = S.Rows(out bool upright);
         var mods = rows.Where(r => !r.Seen.StockSide).ToList();
         var ksp = rows.Where(r => r.Seen.StockSide).ToList();
@@ -448,6 +450,56 @@ public class TBSCheck : MonoBehaviour
 
     // ---- Checks --------------------------------------------------------------------------------
 
+    // A button 0.2.0 knew by another id (Kerbalism's vessel list, then named after KSP's own call on
+    // it) now goes by its mod's, in the same place, hidden or not as before.
+    void CheckRenamed(string where)
+    {
+        foreach (ToolbarSorter.Seen s in S.AllSeen().Where(x => x.Button != null && x.LegacyId != null && x.List != null && x.List.Contains(x.Item)))
+        {
+            int was = startOrder[Setup.SpaceCenter].IndexOf(s.LegacyId);
+            W($"{where}: {s.Name} was [{s.LegacyId}], now [{s.Id}]; place in the old setup {was}");
+            Check(Here.Get(s.LegacyId) == null && Here.Get(s.Id) != null, $"{where}: {s.Name} goes by its new id");
+            if (was >= 0) Check(Here.Rank(s.Id) == was, $"{where}: {s.Name} keeps its place ({Here.Rank(s.Id)} = {was})");
+        }
+    }
+
+    // Old ids as the run now knows them (see CheckRenamed).
+    string Now(string id) => S.AllSeen().FirstOrDefault(s => s.LegacyId == id)?.Id ?? id;
+
+    // KSP's own buttons in the window show their real pictures: rows copy the button's whole picture,
+    // animation and all. Logs what KSP's Contracts and Messages buttons are made of, and screenshots
+    // the window scrolled to KSP's side.
+    IEnumerator CheckPictures()
+    {
+        foreach (string id in new[] { "KSP:ContractsApp", "KSP:MessageSystem" })
+        {
+            ToolbarSorter.Seen s = S.Present(id);
+            if (s == null) { W(id + ": not on the bar here"); continue; }
+            ApplicationLauncherButton b = s.Button;
+            W($"{id}: spriteAnim {(b.spriteAnim != null ? b.spriteAnim.name : "none")}, sprite color {b.sprite.color}, texture '{(b.sprite.texture != null ? b.sprite.texture.name : "none")}'");
+            foreach (Transform t in b.sprite.GetComponentsInChildren<Transform>(true))
+                W($"    {t.name} [{(t.gameObject.activeSelf ? "on" : "off")}]: " + string.Join(", ", t.GetComponents<Component>().Select(c =>
+                    c is Image i ? $"Image({(i.sprite != null ? i.sprite.name : "-")}, {i.color.a:0.##}{(i.enabled ? "" : ", off")})"
+                    : c is RawImage r ? $"RawImage({(r.texture != null ? r.texture.name : "-")}, {r.color.a:0.##}{(r.enabled ? "" : ", off")})"
+                    : c.GetType().Name).ToArray()));
+            RectTransform row = RowObject("Row:" + id);
+            Transform copy = row?.Find("Tile/Picture/Copy");
+            Check(copy != null, $"{id}: its row has a copy of its picture");
+            SpriteRenderer anim = b.sprite.GetComponentInChildren<SpriteRenderer>(true);
+            if (anim != null)
+            {
+                Image frame = row?.Find("Tile/Picture/Frame")?.GetComponent<Image>();
+                Check(frame != null && frame.enabled && frame.sprite != null && frame.sprite == anim.sprite,
+                    $"{id}: its row shows the frame the button's animation is on ({(anim.sprite != null ? anim.sprite.name : "none")})");
+            }
+        }
+        ScrollRect sr = UIMasterController.Instance.dialogCanvas.transform.Find("PhilsToolbarSorter/List")?.GetComponent<ScrollRect>();
+        if (sr != null) { sr.verticalNormalizedPosition = 0; yield return new WaitForSeconds(0.5f); }
+        yield return Shot("ksc-window-ksp-side");
+        if (sr != null) sr.verticalNormalizedPosition = 1;
+        yield return new WaitForSeconds(0.3f);
+    }
+
     // A 0.1.0 setup (one for every scene) becomes a copy in each scene, the old file kept beside it.
     void CheckCopyOver()
     {
@@ -541,7 +593,7 @@ public class TBSCheck : MonoBehaviour
             Check(S.Present(f.Id) != null && (S.Present(f.Id).Button.gameObject.activeSelf || Here.Get(f.Id).Hidden), $"{where}: folder {f.Name} has its button on the bar");
         Check(S.OwnButton != null && S.OwnButton.gameObject.activeSelf, $"{where}: this mod's own button shows");
         List<ToolbarSorter.Row> rows = S.Rows(out bool _);
-        var byPicture = rows.Where(r => r.Seen.Id.StartsWith("Icon:")).Select(r => r.Seen.Name + " [" + r.Seen.Id + "]").ToList();
+        var byPicture = rows.Where(r => r.Seen.Id.StartsWith("Icon:") || r.Seen.Id.StartsWith("Assembly-CSharp:")).Select(r => r.Seen.Name + " [" + r.Seen.Id + "]").ToList();
         Check(byPicture.Count == 0, $"{where}: every button named by its mod" + (byPicture.Count > 0 ? " (by picture: " + string.Join(", ", byPicture.ToArray()) + ")" : ""));
     }
 
@@ -550,8 +602,8 @@ public class TBSCheck : MonoBehaviour
     void CheckUntouched(string where, string scene)
     {
         SceneSetup s = S.Setup.For(scene);
-        Check(s.Order().Take(startOrder[scene].Count).SequenceEqual(startOrder[scene]), $"{where}: this scene's order is as it was at the start");
-        Check(new HashSet<string>(s.Hidden()).SetEquals(startHidden[scene]), $"{where}: this scene hides what it did at the start ({startHidden[scene].Count})");
+        Check(s.Order().Take(startOrder[scene].Count).SequenceEqual(startOrder[scene].Select(Now)), $"{where}: this scene's order is as it was at the start");
+        Check(new HashSet<string>(s.Hidden()).SetEquals(startHidden[scene].Select(Now)), $"{where}: this scene hides what it did at the start ({startHidden[scene].Count})");
         Check(s.Folders.Count == 0, $"{where}: no folders from other scenes ({s.Folders.Count})");
     }
 

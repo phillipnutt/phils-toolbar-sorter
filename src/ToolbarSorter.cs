@@ -23,10 +23,10 @@ using KSP.UI;
 using KSP.UI.Screens;
 using UnityEngine;
 
-[assembly: KSPAssembly("PhilsToolbarSorter", 0, 1)]
-[assembly: AssemblyVersion("0.1.0.0")]
-[assembly: AssemblyFileVersion("0.1.0.0")]
-[assembly: AssemblyInformationalVersion("0.1.0")]
+[assembly: KSPAssembly("PhilsToolbarSorter", 0, 2)]
+[assembly: AssemblyVersion("0.2.0.0")]
+[assembly: AssemblyFileVersion("0.2.0.0")]
+[assembly: AssemblyInformationalVersion("0.2.0")]
 [assembly: AssemblyTitle("Phil's Toolbar Sorter")]
 
 namespace PhilsToolbarSorter
@@ -50,6 +50,7 @@ namespace PhilsToolbarSorter
             public UIListItem Item;
             public UIList List;         // the side of the toolbar it is on
             public string Id, Name;
+            public string LegacyId;     // what 0.2.0 called it, if that was different
             public bool StockSide;      // right of the divider, with KSP's own buttons
             public bool WasOnBar;       // shown at some point in this scene
         }
@@ -130,6 +131,7 @@ namespace PhilsToolbarSorter
         {
             Window.Close();
             Folders.RemoveAll();
+            ButtonNames.Forget();
             if (OwnButton != null && ApplicationLauncher.Instance != null) ApplicationLauncher.Instance.RemoveModApplication(OwnButton);
             OwnButton = null;
             kspSays.Clear();
@@ -159,7 +161,26 @@ namespace PhilsToolbarSorter
             {
                 Debug.LogError($"[PhilsToolbarSorter] Couldn't patch ApplicationLauncher.ShouldBeVisible; hidden buttons are switched off directly instead: {e}");
             }
+
+            // Which mod puts each button on the bar (to name a button that calls nothing of its mod's).
+            try
+            {
+                var harmony = new Harmony("PhilsToolbarSorter.Adders");
+                var after = new HarmonyMethod(typeof(ToolbarSorter).GetMethod(nameof(AfterAdd), BindingFlags.Static | BindingFlags.NonPublic));
+                foreach (string name in new[] { "AddApplication", "AddModApplication" })
+                {
+                    MethodInfo add = typeof(ApplicationLauncher).GetMethod(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(ApplicationLauncherButton) }, null);
+                    if (add != null) harmony.Patch(add, postfix: after);
+                    else Debug.LogWarning($"[PhilsToolbarSorter] ApplicationLauncher.{name}(button) not found.");
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[PhilsToolbarSorter] Couldn't watch buttons being added: {e.Message}");
+            }
         }
+
+        static void AfterAdd(ApplicationLauncherButton __0) => ButtonNames.NoteAdder(__0);
 
         // KSP asks whether a button should show here. Remember KSP's answer (the window
         // lists what KSP would show), then add the player's own "no".
@@ -214,6 +235,7 @@ namespace PhilsToolbarSorter
                 Seen s = Meet(item, stockSide, list, ref appOf);
                 if (s == null) continue;
                 s.List = list;
+                if (s.LegacyId != null) here.Rename(s.LegacyId, s.Id);     // keeps its place under its new name
                 here.Add(s.Id, s.Name);     // new to this scene: on the end
                 KeepOffIfHidden(s);
                 int rank = here.Rank(s.Id);
@@ -257,7 +279,8 @@ namespace PhilsToolbarSorter
             for (int n = 2; seen.Values.Any(o => o.Id == id && o.Button != null && o.Button != b && o.List != null && o.List.Contains(o.Item)); n++)
                 id = baseId + "#" + n;
 
-            s = new Seen { Button = b, Item = item, Id = id, Name = name, StockSide = stockSide, List = list };
+            string legacy = folderId == null ? ButtonNames.LegacyId(b) : null;
+            s = new Seen { Button = b, Item = item, Id = id, Name = name, StockSide = stockSide, List = list, LegacyId = legacy != id ? legacy : null };
             seen[item] = s;
             Debug.Log($"[PhilsToolbarSorter] Button: {name} [{id}] ({(stockSide ? "KSP's side" : "mod side")})");
             if (HiddenByPlayer(s)) ApplyVisibility(s);

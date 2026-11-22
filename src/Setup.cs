@@ -311,6 +311,21 @@ namespace PhilsToolbarSorter
 
         public Entry Get(string id) => id != null && rank.TryGetValue(id, out int i) ? entries[i] : null;
 
+        // A button known by an older id: same place, same hidden or not, same folder, new id.
+        public void Rename(string oldId, string newId)
+        {
+            Entry e = Get(oldId);
+            if (e == null || Get(newId) != null) return;
+            e.Id = newId;
+            foreach (Folder f in folders)
+            {
+                int i = f.Members.IndexOf(oldId);
+                if (i >= 0) f.Members[i] = newId;
+            }
+            Reindex();
+            Dirty = true;
+        }
+
         public IEnumerable<string> Hidden() => entries.Where(e => e.Hidden).Select(e => e.Id);
 
         public IEnumerable<string> Order() => entries.Select(e => e.Id);

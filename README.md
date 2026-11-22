@@ -83,7 +83,12 @@ places, off the bar.
 
 Buttons are told apart the same way every session: Toolbar Controller's buttons
 by its own `IsStockButtonManaged` (namespace and id), KSP's apps by the app,
-and any other mod's button by the class and method it calls.
+any other mod's button by the class and method it calls, and a button that calls
+nothing of its mod's (Kerbalism's vessel list) by the mod method that put it on
+the bar.
+
+Each row's picture is a copy of the button's own, kept in step: KSP's own apps
+draw an animated sprite there, and the row shows the frame it's on.
 
 ## Building
 
@@ -107,13 +112,6 @@ is off and everything else is on, that other scenes' changes don't show, and
 that every button is named by its mod. After a relaunch it checks every scene
 again, opens the folder and deletes it. It writes PASS/FAIL lines and
 screenshots to `Tests/InGame/out`, then removes its save.
-
-## Known gaps
-
-- KSP's own Contracts and Messages buttons show a placeholder gear in the window
-  instead of their icons.
-- Kerbalism's vessel-list button is named "Assembly-CSharp": Kerbalism gives it
-  no calls of its own, so only KSP's are there to name it by.
 
 ## License
 

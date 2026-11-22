@@ -37,8 +37,8 @@ namespace PhilsToolbarSorter
             public Folder Folder;           // the folder this row is, or is in
             public RectTransform Rt;
             public Image Bg;
-            public RawImage Grip, PicRaw;
-            public Image PicSprite;
+            public RawImage Grip;
+            public Picture Pic;
             public HoverRelay Hover;
             public float Y, H, BlockEnd;    // BlockEnd: below a folder's open contents
             public bool TopLevel => Kind == Kind.Button || Kind == Kind.Folder;
@@ -271,8 +271,7 @@ namespace PhilsToolbarSorter
                     Sprite bg = target != null && target.FolderRow == v ? folderLit : hover && v.Kind != Kind.EmptyFolder ? rowHover : null;
                     if (v.Bg.sprite != bg) Ui.SetSprite(v.Bg, bg);
                     if (v.Grip != null) v.Grip.color = hover ? Look.Ink2 : Look.Ink3;
-                    if (v.Kind == Kind.Button || v.Kind == Kind.Member)
-                        ShowPicture(v.Row.Seen.Button, v.PicRaw, v.PicSprite, v.Row.Hidden ? 0.3f : 1f);
+                    if (v.Pic != null) v.Pic.Refresh(v.Row.Hidden ? 0.3f : 1f);
                 }
                 foreach (Btn b in buttons) b.Refresh();
                 close.Refresh();
@@ -381,11 +380,7 @@ namespace PhilsToolbarSorter
             v.Grip = Ui.Picture(Ui.Node(v.Rt, "Grip").At(6, 10, 12, 16), Look.Grip, Look.Ink3);
             RectTransform tile = Ui.Node(v.Rt, "Tile").At(24, 3, 31, 30);
             Ui.Box(tile, Look.Round(Look.KspButton, Look.KspButton, 4));
-            v.PicRaw = Ui.Picture(Ui.Node(tile, "Picture").Stretch(), null, Color.white);
-            v.PicSprite = Ui.Node(tile, "Sprite").Stretch().gameObject.AddComponent<Image>();    // for a button drawn from a sprite
-            v.PicSprite.preserveAspect = true;
-            v.PicSprite.raycastTarget = false;
-            v.PicSprite.enabled = false;
+            v.Pic = Picture.Of(r.Seen.Button, tile);
 
             float w = v.Rt.sizeDelta.x;
             float nameW = w - 64 - 40 - (r.New ? 46 : 0);
@@ -587,43 +582,6 @@ namespace PhilsToolbarSorter
             }
         }
 
-        // A button's picture as the bar shows it now: its texture, or for an animated
-        // button (KSP's own apps) what its animation shows. KSP makes the plain picture
-        // see-through and puts the animation on top of it (ApplicationLauncherButton.SetSprite).
-        static void ShowPicture(ApplicationLauncherButton b, RawImage raw, Image sprite, float alpha)
-        {
-            if (b.spriteAnim != null && (b.sprite == null || b.sprite.color.a < 0.01f))
-            {
-                foreach (Graphic g in b.spriteAnim.GetComponentsInChildren<Graphic>(true))
-                {
-                    if (!g.enabled) continue;
-                    if (g is Image img && img.sprite != null)
-                    {
-                        sprite.sprite = img.sprite;
-                        sprite.color = new Color(1, 1, 1, alpha);
-                        sprite.enabled = true;
-                        raw.enabled = false;
-                        return;
-                    }
-                    if (g is RawImage ri && ri.texture != null)
-                    {
-                        raw.texture = ri.texture;
-                        raw.uvRect = ri.uvRect;
-                        raw.color = new Color(1, 1, 1, alpha);
-                        raw.enabled = true;
-                        sprite.enabled = false;
-                        return;
-                    }
-                }
-            }
-            RawImage src = b.sprite;
-            raw.texture = src != null ? src.texture : null;
-            if (src != null) raw.uvRect = src.uvRect;
-            raw.color = new Color(1, 1, 1, alpha);
-            raw.enabled = raw.texture != null;
-            sprite.enabled = false;
-        }
-
         // ---- Dragging a row -----------------------------------------------------------------------
 
         void BeginDrag(RowView v, Vector2 pointer)
@@ -641,18 +599,7 @@ namespace PhilsToolbarSorter
             if (v.Kind == Kind.Folder)
                 Ui.Picture(Ui.Node(tile, "Folder").At(5, 5, 21, 20), Look.FolderGlyph, Look.FolderColor(v.Folder.Color));
             else
-            {
-                RawImage pr = Ui.Picture(Ui.Node(tile, "Picture").Stretch(), v.PicRaw.texture, Color.white);
-                pr.uvRect = v.PicRaw.uvRect;
-                pr.enabled = v.PicRaw.enabled;
-                if (v.PicSprite.enabled)
-                {
-                    Image ps = Ui.Node(tile, "Sprite").Stretch().gameObject.AddComponent<Image>();
-                    ps.sprite = v.PicSprite.sprite;
-                    ps.preserveAspect = true;
-                    ps.raycastTarget = false;
-                }
-            }
+                Picture.Of(v.Row.Seen.Button, tile).Refresh(1f);
             Ui.Label(Ui.Node(ghost, "Name").At(64, 0, RowW - 110, RowH), v.Kind == Kind.Folder ? v.Folder.Name : v.Row.Seen.Name, Look.Body, 14, Look.Ink);
             CanvasGroup cg = ghost.gameObject.AddComponent<CanvasGroup>();
             cg.blocksRaycasts = false;

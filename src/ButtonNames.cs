@@ -14,9 +14,19 @@ namespace PhilsToolbarSorter
     //      id and tooltip), the supported way to ask which mod a button belongs to.
     //   2. KSP's own apps (KSPedia, Contracts, Messages...): the app behind the button.
     //   3. Any other mod's button: the mod's class and method the button calls.
+    //   4. A mod's button that calls nothing of the mod's (Kerbalism's vessel list watches
+    //      the pointer itself): the mod's method that put it on the bar.
     // Nothing here is guessed from position or order.
     static class ButtonNames
     {
+        // Version 0.2.0 named a button that calls nothing of its mod's by KSP's own call on it;
+        // that old id, so a setup made then keeps the button's place.
+        public static string LegacyId(ApplicationLauncherButton b)
+        {
+            MethodInfo m = FirstCall(b, skipKsp: false);
+            return m == null || m.DeclaringType.Assembly != KspAssembly ? null : IdOf(m);
+        }
+
         public static void Identify(ApplicationLauncherButton b, Func<ApplicationLauncherButton, UIApp> appOf, out string id, out string name)
         {
             if (ToolbarControllerKnows(b, out string ns, out string tcId, out string tip))
@@ -38,14 +48,18 @@ namespace PhilsToolbarSorter
                 return;
             }
 
-            MethodInfo m = FirstCall(b);
+            MethodInfo m = FirstCall(b, skipKsp: true);
             if (m != null)
             {
-                Type owner = m.DeclaringType;
-                while (owner.DeclaringType != null && owner.Name.StartsWith("<")) owner = owner.DeclaringType;    // lambdas live in hidden nested classes
-                Assembly asm = owner.Assembly;
-                id = asm.GetName().Name + ":" + owner.FullName + "." + MethodName(m.Name);
-                name = ModName(asm);
+                id = IdOf(m);
+                name = ModName(Owner(m).Assembly);
+                return;
+            }
+
+            if (adders.TryGetValue(b, out MethodBase added) && added != null)
+            {
+                id = Owner(added).Assembly.GetName().Name + ":added by " + Owner(added).FullName + "." + MethodName(added.Name);
+                name = ModName(Owner(added).Assembly);
                 return;
             }
 
@@ -116,9 +130,12 @@ namespace PhilsToolbarSorter
 
         // ---- 3. Other mods --------------------------------------------------------------
 
-        // The first thing the button calls that its mod wrote (KSP fills unset calls with
-        // its own empty ones).
-        static MethodInfo FirstCall(ApplicationLauncherButton b)
+        static readonly Assembly KspAssembly = typeof(ApplicationLauncherButton).Assembly;
+
+        // The first thing the button calls that its mod wrote. KSP fills unset calls with its
+        // own empty ones, and adds calls of its own to buttons on its side (the toolbar's
+        // "one open at a time" handling); with skipKsp, none of KSP's count.
+        static MethodInfo FirstCall(ApplicationLauncherButton b, bool skipKsp)
         {
             foreach (Delegate d in Calls(b))
             {
@@ -127,9 +144,54 @@ namespace PhilsToolbarSorter
                 bool kspFiller = false;
                 for (Type t = m.DeclaringType; t != null; t = t.DeclaringType)
                     if (t == typeof(ApplicationLauncherButton)) kspFiller = true;
-                if (!kspFiller) return m;
+                if (kspFiller || skipKsp && m.DeclaringType.Assembly == KspAssembly) continue;
+                return m;
             }
             return null;
+        }
+
+        static Type Owner(MethodBase m)
+        {
+            Type owner = m.DeclaringType;
+            while (owner.DeclaringType != null && owner.Name.StartsWith("<")) owner = owner.DeclaringType;    // lambdas live in hidden nested classes
+            return owner;
+        }
+
+        static string IdOf(MethodBase m) => Owner(m).Assembly.GetName().Name + ":" + Owner(m).FullName + "." + MethodName(m.Name);
+
+        // ---- 4. The mod that put the button on the bar ----------------------------------------
+
+        static readonly Dictionary<ApplicationLauncherButton, MethodBase> adders = new Dictionary<ApplicationLauncherButton, MethodBase>();
+
+        // Called as KSP adds a button (a Harmony postfix on ApplicationLauncher.AddApplication /
+        // AddModApplication): the first method up the call stack that belongs to a mod.
+        public static void NoteAdder(ApplicationLauncherButton b)
+        {
+            if (b == null) return;
+            try
+            {
+                Assembly own = typeof(ButtonNames).Assembly, harmony = typeof(HarmonyLib.Harmony).Assembly, core = typeof(object).Assembly;
+                foreach (System.Diagnostics.StackFrame f in new System.Diagnostics.StackTrace(1, false).GetFrames() ?? new System.Diagnostics.StackFrame[0])
+                {
+                    MethodBase m = f.GetMethod();
+                    Type t = m?.DeclaringType;
+                    if (t == null) continue;
+                    Assembly a = t.Assembly;
+                    if (a == KspAssembly || a == own || a == harmony || a == core || a.GetName().Name.StartsWith("UnityEngine")) continue;
+                    adders[b] = m;
+                    return;
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[PhilsToolbarSorter] Couldn't tell which mod added a button: {e.Message}");
+            }
+        }
+
+        // Buttons gone with their scene.
+        public static void Forget()
+        {
+            foreach (ApplicationLauncherButton gone in adders.Keys.Where(k => k == null).ToList()) adders.Remove(gone);
         }
 
         // Everything the button calls. KSP adds a mod's calls after its own empty ones

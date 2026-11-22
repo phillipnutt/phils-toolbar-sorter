@@ -1,12 +1,17 @@
 // TBSCheck: throwaway in-game check of Phil's Toolbar Sorter. Not a mod; installed only for the test runs.
 // Does nothing unless <KSP>/TBSCheck/run.flag exists. Its text is the phase:
-//   1: makes the career save "zz_TBSCheck"; at the Space Center hides one button with the window's eye, drags one
-//      row with the window, moves two more through the mod's API; then checks the bar in the Space Center, VAB,
-//      flight, map view, Tracking Station and Space Center again; saves what it expects; quits.
-//   2: loads that save after a relaunch and checks the same at the Space Center and Tracking Station; quits.
-// Checks (each scene): every side of the bar is in the setup's order (KSP's list order follows the setup, and the
-// buttons on screen follow KSP's list); hidden buttons are off; the moved buttons keep the order set at the start.
-// Output: <KSP>/TBSCheck/results.log and *.png (taken with the interface showing).
+//   1: makes the career save "zz_TBSCheck". If the install had a 0.1.0 setup (one for every scene), checks that every
+//      scene starts as a copy of it. Then, each scene with its own changes: at the Space Center hides a button with the
+//      window's eye, drags a row with the window and moves two more through the mod's API; in the VAB hides one and
+//      moves one; in flight the same (map view shares flight's setup); the Tracking Station is left alone. Checks every
+//      scene after each (Space Center again at the end), saves what it expects for each scene, quits.
+//   2: loads that save after a relaunch and checks every scene's setup and bar again; quits.
+//   icons: a sandbox save, the toolbar at the Space Center and in the VAB, screenshots; quits.
+// Checks (each scene): each side of the bar is in this scene's order (KSP's list follows the setup, and the buttons on
+// screen follow KSP's list); buttons hidden here are off; buttons KSP would show here and not hidden here are ON (a
+// button hidden in another scene doesn't stay hidden); every button is named by its mod; changes made in one scene
+// leave the others as they were.
+// Output: <KSP>/TBSCheck/results-phase<N>.log and *.png (taken with the interface showing).
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -67,6 +72,13 @@ public class TBSCheck : MonoBehaviour
     }
 
     ToolbarSorter S => ToolbarSorter.Instance;
+    SceneSetup Here => S.Here;
+
+    // What each scene's setup held when the run began, and what it should hold after the run's changes.
+    readonly Dictionary<string, List<string>> startOrder = new Dictionary<string, List<string>>();
+    readonly Dictionary<string, HashSet<string>> startHidden = new Dictionary<string, HashSet<string>>();
+    readonly Dictionary<string, List<string>> wantOrder = new Dictionary<string, List<string>>();
+    readonly Dictionary<string, HashSet<string>> wantHidden = new Dictionary<string, HashSet<string>>();
 
     // ---- Phase 1 -------------------------------------------------------------------------------
 
@@ -74,6 +86,13 @@ public class TBSCheck : MonoBehaviour
     {
         yield return new WaitForSeconds(3f);
         W("Phase 1 started. Sorter present: " + (S != null) + ", setup file: " + File.Exists(Setup.FilePath));
+        CheckCopyOver();
+        foreach (string sc in Setup.Scenes)
+        {
+            startOrder[sc] = S.Setup.For(sc).Order().ToList();
+            startHidden[sc] = new HashSet<string>(S.Setup.For(sc).Hidden());
+        }
+
         GameParameters gp = GameParameters.GetDefaultParameters(Game.Modes.CAREER, GameParameters.Preset.Normal);
         Game g = GamePersistence.CreateNewGame(SaveName, Game.Modes.CAREER, gp, "Squad/Flags/default", GameScenes.SPACECENTER, EditorFacility.VAB);
         HighLogic.CurrentGame = g;
@@ -82,91 +101,77 @@ public class TBSCheck : MonoBehaviour
         g.Start();
         W("Created career save " + SaveName);
 
+        // Space Center: the window's eye and a drag, then two moves through the API.
         yield return Arrive(GameScenes.SPACECENTER, 14f);
         Report("ksc-before");
         CheckScene("Space Center, before");
+        CheckUntouched("Space Center, before", Setup.SpaceCenter);
         yield return Shot("ksc-before");
-
-        // The window: open it, hide one button with its eye, drag the button nearest the divider to the far end.
         S.Window.Open();
         yield return new WaitForSeconds(1f);
         List<ToolbarSorter.Row> rows = S.Rows(out bool upright);
-        List<ToolbarSorter.Row> mods = rows.Where(r => !r.Seen.StockSide).ToList();
-        List<ToolbarSorter.Row> ksp = rows.Where(r => r.Seen.StockSide).ToList();
-        W("Window rows: " + string.Join(" / ", S.Window.ShownRows().ToArray()));
+        var mods = rows.Where(r => !r.Seen.StockSide).ToList();
+        var ksp = rows.Where(r => r.Seen.StockSide).ToList();
         ToolbarSorter.Row hide = mods.First(r => !r.Own && !r.Hidden);
         ToolbarSorter.Row move = mods.Last(r => !r.Own && r != hide);
-        W($"Hiding with the eye: {hide.Seen.Name} [{hide.Seen.Id}]");
+        W($"Space Center: hiding with the eye {hide.Seen.Name} [{hide.Seen.Id}]; dragging {move.Seen.Name} to the far end");
         Check(ClickEye(hide.Seen.Name), "eye button found for " + hide.Seen.Name);
         yield return new WaitForSeconds(0.5f);
-        Check(S.Setup.Get(hide.Seen.Id).Hidden, "eye hid " + hide.Seen.Name + " in the setup");
+        Check(Here.Get(hide.Seen.Id).Hidden, "eye hid " + hide.Seen.Name + " in the Space Center setup");
         Check(!hide.Seen.Button.gameObject.activeSelf, "eye switched off " + hide.Seen.Name + " on the bar");
-        W($"Dragging in the window: {move.Seen.Name} [{move.Seen.Id}] to before the first mod row");
         Check(DragRow(move.Seen.Name, 0), "drag rows found");
         yield return new WaitForSeconds(0.5f);
         yield return Shot("ksc-window");
-        Check(S.Window.ShownRows().Count > 0, "window shows rows: " + S.Window.ShownRows().Count);
         S.CloseFromWindow();
         yield return new WaitForSeconds(0.5f);
         Check(!S.Window.IsOpen, "window closes from its close call");
-
-        // Through the API: this mod's own button to the divider end; KSP's first shown button to its far end.
         rows = S.Rows(out upright);
         var modOrder = rows.Where(r => !r.Seen.StockSide).Select(r => r.Seen).ToList();
         ToolbarSorter.Seen own = modOrder.FirstOrDefault(s => s.Button == S.OwnButton);
         Check(own != null, "own button has a row");
-        if (own != null) { modOrder.Remove(own); modOrder.Add(own); S.Reorder(modOrder, upright); }
+        if (own != null) { modOrder.Remove(own); modOrder.Add(own); S.Reorder(modOrder, upright); S.SetHidden(own, true); }
         var kspOrder = rows.Where(r => r.Seen.StockSide).Select(r => r.Seen).ToList();
         ToolbarSorter.Seen firstKsp = rows.Where(r => r.Seen.StockSide && !r.Hidden).Select(r => r.Seen).FirstOrDefault();
-        if (firstKsp != null) { kspOrder.Remove(firstKsp); kspOrder.Add(firstKsp); S.Reorder(kspOrder, upright); W("Moved KSP's " + firstKsp.Name + " to the far end"); }
-        if (own != null) S.SetHidden(own, true);
+        if (firstKsp != null) { kspOrder.Remove(firstKsp); kspOrder.Add(firstKsp); S.Reorder(kspOrder, upright); }
         yield return new WaitForSeconds(1f);
-        Check(own != null && !S.Setup.Get(own.Id).Hidden && S.OwnButton.gameObject.activeSelf, "own button can't be hidden");
-
-        // What the window should show now.
+        Check(own != null && !Here.Get(own.Id).Hidden && S.OwnButton.gameObject.activeSelf, "own button can't be hidden");
         var expMods = mods.Select(r => r.Seen).Where(s => s != move.Seen && s != own).ToList();
         expMods.Insert(0, move.Seen);
         if (own != null) expMods.Add(own);
         var expKsp = ksp.Select(r => r.Seen).ToList();
         if (firstKsp != null) { expKsp.Remove(firstKsp); expKsp.Add(firstKsp); }
         rows = S.Rows(out upright);
-        Check(Same(rows.Where(r => !r.Seen.StockSide).Select(r => r.Seen.Id), expMods.Select(s => s.Id)), "mod side in the order set: " + Names(rows, false));
-        Check(Same(rows.Where(r => r.Seen.StockSide).Select(r => r.Seen.Id), expKsp.Select(s => s.Id)), "KSP side in the order set: " + Names(rows, true));
+        Check(rows.Where(r => !r.Seen.StockSide).Select(r => r.Seen.Id).SequenceEqual(expMods.Select(s => s.Id)), "Space Center mod side in the order set: " + Names(rows, false));
+        Check(rows.Where(r => r.Seen.StockSide).Select(r => r.Seen.Id).SequenceEqual(expKsp.Select(s => s.Id)), "Space Center KSP side in the order set: " + Names(rows, true));
         CheckScene("Space Center, after");
+        Remember(Setup.SpaceCenter);
         yield return Shot("ksc-after");
 
-        // Remember KSP's list order of every button here, and which are hidden, for every later check.
-        expected = new Dictionary<bool, List<string>> { { false, ListOrder(false) }, { true, ListOrder(true) } };
-        hiddenIds = S.Setup.Hidden().ToList();
-        var save = new ConfigNode("EXPECT");
-        foreach (string id in expected[false]) save.AddValue("mod", id);
-        foreach (string id in expected[true]) save.AddValue("ksp", id);
-        foreach (string id in hiddenIds) save.AddValue("hidden", id);
-        save.Save(Path.Combine(Root, "expected.cfg"));
-        W("Expected mod list order: " + string.Join(", ", expected[false].ToArray()));
-        W("Expected KSP list order: " + string.Join(", ", expected[true].ToArray()));
-        W("Hidden: " + string.Join(", ", hiddenIds.ToArray()));
-        CheckKept("Space Center");
-
+        // VAB: the Space Center's changes must not show here. Then its own: hide one, move one.
         GamePersistence.SaveGame("persistent", SaveName, SaveMode.OVERWRITE);
         EditorDriver.StartEditor(EditorFacility.VAB);
         yield return Arrive(GameScenes.EDITOR, 12f);
-        Report("vab"); CheckScene("VAB"); CheckKept("VAB");
+        Report("vab");
+        CheckScene("VAB");
+        CheckUntouched("VAB", Setup.Editors);
+        yield return ChangeHere("VAB");
+        CheckScene("VAB, after");
+        Remember(Setup.Editors);
         yield return Shot("vab");
 
-        // Flight: a probe core alone on the pad.
+        // Flight (map view shares its setup): untouched by the others, then its own changes.
         string craft = WriteCraft();
         Check(craft != null, "test craft written");
         if (craft != null)
         {
-            ConfigNode cn = ConfigNode.Load(craft);
-            FlightDriver.StartWithNewLaunch(craft, "Squad/Flags/default", "LaunchPad", VesselCrewManifest.FromConfigNode(cn));
-            float t0 = Time.realtimeSinceStartup;
-            while (!(HighLogic.LoadedSceneIsFlight && FlightGlobals.ActiveVessel != null && FlightGlobals.ActiveVessel.loaded && !FlightGlobals.ActiveVessel.packed)
-                   && Time.realtimeSinceStartup - t0 < 180f) yield return null;
-            yield return new WaitForSeconds(12f);
-            Report("flight"); CheckScene("Flight"); CheckKept("Flight");
+            yield return Launch(craft);
+            Report("flight");
+            CheckScene("Flight");
+            CheckUntouched("Flight", Setup.Flight);
             Check(ApplicationLauncher.Instance.IsPositionedAtTop, "flight bar stands upright");
+            yield return ChangeHere("Flight");
+            CheckScene("Flight, after");
+            Remember(Setup.Flight);
             yield return Shot("flight");
             S.Window.Open();
             yield return new WaitForSeconds(1f);
@@ -175,23 +180,42 @@ public class TBSCheck : MonoBehaviour
             S.CloseFromWindow();
             MapView.EnterMapView();
             yield return new WaitForSeconds(4f);
-            Report("map"); CheckScene("Map view"); CheckKept("Map view");
+            Report("map");
+            CheckScene("Map view");
+            CheckKept("Map view", Setup.Flight);
             yield return Shot("map");
             MapView.ExitMapView();
             yield return new WaitForSeconds(2f);
             GamePersistence.SaveGame("persistent", SaveName, SaveMode.OVERWRITE);
         }
 
+        // Tracking Station: nothing changed anywhere touches it.
         HighLogic.LoadScene(GameScenes.TRACKSTATION);
         yield return Arrive(GameScenes.TRACKSTATION, 12f);
-        Report("trackingstation"); CheckScene("Tracking Station"); CheckKept("Tracking Station");
+        Report("trackingstation");
+        CheckScene("Tracking Station");
+        CheckUntouched("Tracking Station", Setup.TrackingStation);
+        Remember(Setup.TrackingStation);
         yield return Shot("trackingstation");
 
+        // Space Center again: its own changes still there.
         HighLogic.LoadScene(GameScenes.SPACECENTER);
         yield return Arrive(GameScenes.SPACECENTER, 12f);
-        Report("ksc-again"); CheckScene("Space Center, again"); CheckKept("Space Center, again");
+        Report("ksc-again");
+        CheckScene("Space Center, again");
+        CheckKept("Space Center, again", Setup.SpaceCenter);
         yield return Shot("ksc-again");
         GamePersistence.SaveGame("persistent", SaveName, SaveMode.OVERWRITE);
+
+        var save = new ConfigNode("EXPECT");
+        foreach (string sc in wantOrder.Keys)
+        {
+            ConfigNode n = save.AddNode("SCENE");
+            n.AddValue("name", sc);
+            foreach (string id in wantOrder[sc]) n.AddValue("order", id);
+            foreach (string id in wantHidden[sc]) n.AddValue("hidden", id);
+        }
+        save.Save(Path.Combine(Root, "expected.cfg"));
     }
 
     // ---- Phase 2: after a relaunch ----------------------------------------------------------
@@ -201,9 +225,16 @@ public class TBSCheck : MonoBehaviour
         yield return new WaitForSeconds(3f);
         W("Phase 2 started. Setup file: " + File.Exists(Setup.FilePath));
         ConfigNode exp = ConfigNode.Load(Path.Combine(Root, "expected.cfg"));
-        expected = new Dictionary<bool, List<string>> { { false, exp.GetValues("mod").ToList() }, { true, exp.GetValues("ksp").ToList() } };
-        hiddenIds = exp.GetValues("hidden").ToList();
-        foreach (string id in hiddenIds) Check(S.Setup.Get(id) != null && S.Setup.Get(id).Hidden, "still hidden after relaunch: " + id);
+        foreach (ConfigNode n in exp.GetNodes("SCENE"))
+        {
+            string sc = n.GetValue("name");
+            wantOrder[sc] = n.GetValues("order").ToList();
+            wantHidden[sc] = new HashSet<string>(n.GetValues("hidden"));
+            SceneSetup s = S.Setup.For(sc);
+            Check(s != null && new HashSet<string>(s.Hidden()).SetEquals(wantHidden[sc]), $"after relaunch, {Setup.DisplayName(sc)} hides the same buttons ({wantHidden[sc].Count})");
+            var order = s != null ? s.Order().Where(id => wantOrder[sc].Contains(id)).ToList() : new List<string>();
+            Check(order.SequenceEqual(wantOrder[sc]), $"after relaunch, {Setup.DisplayName(sc)} keeps its order ({wantOrder[sc].Count})");
+        }
 
         Game g = GamePersistence.LoadGame("persistent", SaveName, true, false);
         Check(g != null, "test save loads");
@@ -212,11 +243,24 @@ public class TBSCheck : MonoBehaviour
         HighLogic.SaveFolder = SaveName;
         g.Start();
         yield return Arrive(GameScenes.SPACECENTER, 14f);
-        Report("relaunch-ksc"); CheckScene("Space Center after relaunch"); CheckKept("Space Center after relaunch");
+        Report("relaunch-ksc"); CheckScene("Space Center after relaunch"); CheckKept("Space Center after relaunch", Setup.SpaceCenter);
         yield return Shot("relaunch-ksc");
+        GamePersistence.SaveGame("persistent", SaveName, SaveMode.OVERWRITE);
+        EditorDriver.StartEditor(EditorFacility.VAB);
+        yield return Arrive(GameScenes.EDITOR, 12f);
+        Report("relaunch-vab"); CheckScene("VAB after relaunch"); CheckKept("VAB after relaunch", Setup.Editors);
+        yield return Shot("relaunch-vab");
+        string craft = WriteCraft();
+        if (craft != null)
+        {
+            yield return Launch(craft);
+            Report("relaunch-flight"); CheckScene("Flight after relaunch"); CheckKept("Flight after relaunch", Setup.Flight);
+            yield return Shot("relaunch-flight");
+            GamePersistence.SaveGame("persistent", SaveName, SaveMode.OVERWRITE);
+        }
         HighLogic.LoadScene(GameScenes.TRACKSTATION);
         yield return Arrive(GameScenes.TRACKSTATION, 12f);
-        Report("relaunch-ts"); CheckScene("Tracking Station after relaunch"); CheckKept("Tracking Station after relaunch");
+        Report("relaunch-ts"); CheckScene("Tracking Station after relaunch"); CheckKept("Tracking Station after relaunch", Setup.TrackingStation);
         yield return Shot("relaunch-ts");
     }
 
@@ -261,20 +305,65 @@ public class TBSCheck : MonoBehaviour
 
     // ---- Checks --------------------------------------------------------------------------------
 
-    Dictionary<bool, List<string>> expected;
-    List<string> hiddenIds;
+    // A 0.1.0 setup (one for every scene) becomes a copy in each scene, the old file kept beside it.
+    void CheckCopyOver()
+    {
+        string old = Setup.FilePath + ".before-per-scene";
+        if (!File.Exists(old)) { W("No 0.1.0 setup to copy over (fresh start)."); return; }
+        ConfigNode node = ConfigNode.Load(old)?.GetNode("TOOLBAR_SORTER");
+        var oldOrder = node.GetNodes("BUTTON").Select(b => b.GetValue("id")).ToList();
+        var oldHidden = new HashSet<string>(node.GetNodes("BUTTON").Where(b => b.GetValue("hidden") == "True").Select(b => b.GetValue("id")));
+        W($"0.1.0 setup found: {oldOrder.Count} buttons, {oldHidden.Count} hidden.");
+        foreach (string sc in Setup.Scenes)
+        {
+            SceneSetup s = S.Setup.For(sc);
+            Check(s.Order().Take(oldOrder.Count).SequenceEqual(oldOrder), $"{Setup.DisplayName(sc)} starts with the old order");
+            Check(new HashSet<string>(s.Hidden()).SetEquals(oldHidden), $"{Setup.DisplayName(sc)} starts hiding the old {oldHidden.Count}");
+        }
+    }
 
     IEnumerator Arrive(GameScenes scene, float settle)
     {
         float t0 = Time.realtimeSinceStartup;
         while (HighLogic.LoadedScene != scene && Time.realtimeSinceStartup - t0 < 180f) yield return null;
         yield return new WaitForSeconds(settle);    // mods add their buttons a few frames to seconds after the scene starts
-        W("=== " + SceneName());
+        W("=== " + SorterWindow.SceneName() + " (setup: " + Setup.DisplayName(Setup.SceneOf(HighLogic.LoadedScene)) + ")");
     }
 
-    static string SceneName() => SorterWindow.SceneName();
+    IEnumerator Launch(string craft)
+    {
+        ConfigNode cn = ConfigNode.Load(craft);
+        FlightDriver.StartWithNewLaunch(craft, "Squad/Flags/default", "LaunchPad", VesselCrewManifest.FromConfigNode(cn));
+        float t0 = Time.realtimeSinceStartup;
+        while (!(HighLogic.LoadedSceneIsFlight && FlightGlobals.ActiveVessel != null && FlightGlobals.ActiveVessel.loaded && !FlightGlobals.ActiveVessel.packed)
+               && Time.realtimeSinceStartup - t0 < 180f) yield return null;
+        yield return new WaitForSeconds(12f);
+        W("=== Flight (setup: " + Setup.DisplayName(Setup.Flight) + ")");
+    }
 
-    // Every side: KSP's list in the setup's order; the buttons showing on screen in KSP's list order; hidden ones off.
+    // This scene's own change: hide the first visible mod button (not this mod's), and move the
+    // last mod button to the first place on screen.
+    IEnumerator ChangeHere(string where)
+    {
+        List<ToolbarSorter.Row> rows = S.Rows(out bool upright);
+        var mods = rows.Where(r => !r.Seen.StockSide).ToList();
+        ToolbarSorter.Row hide = mods.FirstOrDefault(r => !r.Own && !r.Hidden);
+        ToolbarSorter.Row move = mods.LastOrDefault(r => !r.Own && r != hide);
+        if (hide == null || move == null) { W(where + ": not enough mod buttons to change"); yield break; }
+        W($"{where}: hiding {hide.Seen.Name} [{hide.Seen.Id}], moving {move.Seen.Name} [{move.Seen.Id}] to the first place");
+        S.SetHidden(hide.Seen, true);
+        var order = mods.Select(r => r.Seen).ToList();
+        order.Remove(move.Seen);
+        order.Insert(0, move.Seen);
+        S.Reorder(order, upright);
+        yield return new WaitForSeconds(1f);
+        Check(!hide.Seen.Button.gameObject.activeSelf, $"{where}: {hide.Seen.Name} hidden");
+        var now = S.Rows(out upright).Where(r => !r.Seen.StockSide).Select(r => r.Seen.Id).ToList();
+        Check(now.SequenceEqual(order.Select(s => s.Id)), $"{where}: mod side in the order set");
+    }
+
+    // Each side: KSP's list in this scene's order; buttons on screen in KSP's list order; hidden ones off;
+    // buttons KSP would show here and not hidden here are on; names from mods; this mod's own button showing.
     void CheckScene(string where)
     {
         ApplauncherLayout layout = ApplicationLauncher.Instance.CurrentLayout;
@@ -283,12 +372,11 @@ public class TBSCheck : MonoBehaviour
         {
             string name = side.stock ? "KSP side" : "mod side";
             var items = Items(side.list);
-            var ranks = items.Select(i => S.Setup.Rank(IdOf(i))).ToList();
+            var ranks = items.Select(i => Here.Rank(IdOf(i))).ToList();
             bool ordered = true;
             for (int k = 1; k < ranks.Count; k++) if (ranks[k] < ranks[k - 1]) ordered = false;
-            Check(ordered, $"{where}: {name} list follows the setup ({items.Count} buttons)");
+            Check(ordered, $"{where}: {name} list follows this scene's setup ({items.Count} buttons)");
             var shown = items.Where(i => i.gameObject.activeInHierarchy).ToList();
-            // One direction all the way along (along the bar: x when flat, y when upright).
             var steps = new List<float>();
             for (int k = 1; k < shown.Count; k++)
             {
@@ -296,30 +384,49 @@ public class TBSCheck : MonoBehaviour
                 steps.Add(upright ? b.y - a.y : b.x - a.x);
             }
             bool monotonic = steps.All(d => d > 0.01f) || steps.All(d => d < -0.01f);
-            Check(monotonic, $"{where}: {name} on screen follows the list ({shown.Count} showing, " +
-                             (steps.Count == 0 ? "-" : steps[0] < 0 ? (upright ? "downward" : "leftward") : (upright ? "upward" : "rightward")) + ")");
+            Check(monotonic, $"{where}: {name} on screen follows the list ({shown.Count} showing)");
         }
-        foreach (ToolbarSorter.Seen s in S.AllSeen().Where(x => x.Button != null && x.Button != S.OwnButton && S.Setup.Get(x.Id) != null && S.Setup.Get(x.Id).Hidden))
-            Check(!s.Button.gameObject.activeSelf, $"{where}: hidden {s.Name} is off");
+        var here = S.AllSeen().Where(x => x.Button != null && x.List != null && x.List.Contains(x.Item)).ToList();
+        var stuckOn = here.Where(x => x.Button != S.OwnButton && Here.Get(x.Id) != null && Here.Get(x.Id).Hidden && x.Button.gameObject.activeSelf).Select(x => x.Name).ToList();
+        Check(stuckOn.Count == 0, $"{where}: buttons hidden here are off" + (stuckOn.Count > 0 ? " (on: " + string.Join(", ", stuckOn.ToArray()) + ")" : ""));
+        var stuckOff = here.Where(x => S.KspWouldShow(x.Button) && !(Here.Get(x.Id)?.Hidden ?? false) && !x.Button.gameObject.activeSelf).Select(x => x.Name).ToList();
+        Check(stuckOff.Count == 0, $"{where}: buttons not hidden here are on" + (stuckOff.Count > 0 ? " (off: " + string.Join(", ", stuckOff.ToArray()) + ")" : ""));
         Check(S.OwnButton != null && S.OwnButton.gameObject.activeSelf, $"{where}: this mod's own button shows");
-        // Names come from the mods, not from pictures; this mod's own button has the same id everywhere.
         List<ToolbarSorter.Row> rows = S.Rows(out bool _);
         var byPicture = rows.Where(r => r.Seen.Id.StartsWith("Icon:")).Select(r => r.Seen.Name + " [" + r.Seen.Id + "]").ToList();
         Check(byPicture.Count == 0, $"{where}: every button named by its mod" + (byPicture.Count > 0 ? " (by picture: " + string.Join(", ", byPicture.ToArray()) + ")" : ""));
-        string ownId = rows.FirstOrDefault(r => r.Own)?.Seen.Id;
-        Check(ownId == "PhilsToolbarSorter:PhilsToolbarSorter.ToolbarSorter.OpenWindow", $"{where}: own button's id is {ownId}");
     }
 
-    // The buttons present here keep the list order set at the start.
-    void CheckKept(string where)
+    // Arriving in a scene whose setup nothing in this run has changed: it is as it was at the start
+    // (plus any buttons met here for the first time, on the end), whatever other scenes did.
+    void CheckUntouched(string where, string scene)
     {
-        if (expected == null) return;
+        SceneSetup s = S.Setup.For(scene);
+        Check(s.Order().Take(startOrder[scene].Count).SequenceEqual(startOrder[scene]), $"{where}: this scene's order is as it was at the start");
+        Check(new HashSet<string>(s.Hidden()).SetEquals(startHidden[scene]), $"{where}: this scene hides what it did at the start ({startHidden[scene].Count})");
+    }
+
+    // After this scene's changes: remember its order and hidden buttons, for later visits and the relaunch.
+    void Remember(string scene)
+    {
+        wantOrder[scene] = S.Setup.For(scene).Order().ToList();
+        wantHidden[scene] = new HashSet<string>(S.Setup.For(scene).Hidden());
+        W($"{Setup.DisplayName(scene)} now hides: " + string.Join(", ", wantHidden[scene].ToArray()));
+    }
+
+    // Back in a scene: its setup and KSP's list order are as remembered.
+    void CheckKept(string where, string scene)
+    {
+        if (!wantOrder.ContainsKey(scene)) return;
+        SceneSetup s = S.Setup.For(scene);
+        Check(new HashSet<string>(s.Hidden()).SetEquals(wantHidden[scene]), $"{where}: hides the same buttons as before");
+        Check(s.Order().Take(wantOrder[scene].Count).SequenceEqual(wantOrder[scene]), $"{where}: setup order kept");
         foreach (bool stock in new[] { false, true })
         {
             List<string> now = ListOrder(stock);
-            var both = now.Where(id => expected[stock].Contains(id)).ToList();
-            var want = expected[stock].Where(id => both.Contains(id)).ToList();
-            Check(Same(both, want), $"{where}: {(stock ? "KSP" : "mod")} side keeps the set order ({both.Count} of them here)");
+            var both = now.Where(id => wantOrder[scene].Contains(id)).ToList();
+            var want = wantOrder[scene].Where(id => both.Contains(id)).ToList();
+            Check(both.SequenceEqual(want), $"{where}: {(stock ? "KSP" : "mod")} side on the bar in the kept order ({both.Count})");
         }
     }
 
@@ -346,7 +453,6 @@ public class TBSCheck : MonoBehaviour
             W($"  {(r.Seen.StockSide ? "KSP" : "mod")} {(r.Hidden ? "HIDDEN" : r.Seen.Button.gameObject.activeSelf ? "shown " : "off   ")} {r.Seen.Name} [{r.Seen.Id}]{(r.Own ? " (own)" : "")}{(r.New ? " (new)" : "")}");
     }
 
-    static bool Same(IEnumerable<string> a, IEnumerable<string> b) => a.SequenceEqual(b);
     static string Names(List<ToolbarSorter.Row> rows, bool stock) => string.Join(", ", rows.Where(r => r.Seen.StockSide == stock).Select(r => r.Seen.Name).ToArray());
 
     // ---- Driving the window like a player ------------------------------------------------------

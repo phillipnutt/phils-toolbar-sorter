@@ -36,6 +36,9 @@ namespace PhilsToolbarSorter
     {
         public static ToolbarSorter Instance { get; private set; }
         public Setup Setup { get; private set; }
+
+        // The setup for the scene KSP is in now (none at the main menu).
+        public SceneSetup Here => Setup?.For(Setup.SceneOf(HighLogic.LoadedScene));
         public SorterWindow Window { get; private set; }
         public ApplicationLauncherButton OwnButton { get; private set; }
 
@@ -65,6 +68,7 @@ namespace PhilsToolbarSorter
         readonly Dictionary<ApplicationLauncherButton, bool> kspSays = new Dictionary<ApplicationLauncherButton, bool>();   // KSP's own verdict, this scene
         bool patched;
         int sortsLogged, errorsLogged;
+        SceneSetup lastHere;
 
         void Start()
         {
@@ -167,10 +171,19 @@ namespace PhilsToolbarSorter
             try
             {
                 ApplauncherLayout layout = ApplicationLauncher.Instance != null ? ApplicationLauncher.Instance.CurrentLayout : null;
-                if (layout != null)
+                SceneSetup here = Here;
+                if (layout != null && here != null)
                 {
-                    Tend(layout.GetModList(), false);
-                    Tend(layout.GetStockList(), true);
+                    // Into a scene with its own setup: buttons that stay on the bar from the
+                    // last scene get KSP to decide again whether they show here.
+                    if (here != lastHere)
+                    {
+                        lastHere = here;
+                        foreach (Seen s in seen.Values.ToList())
+                            if (s.Button != null) ApplyVisibility(s);
+                    }
+                    Tend(layout.GetModList(), false, here);
+                    Tend(layout.GetStockList(), true, here);
                 }
             }
             catch (Exception e)
@@ -182,7 +195,7 @@ namespace PhilsToolbarSorter
         }
 
         // One side of the toolbar: meet new buttons, keep hidden ones off, keep the order.
-        void Tend(UIList list, bool stockSide)
+        void Tend(UIList list, bool stockSide, SceneSetup here)
         {
             if (list == null) return;
             int count = list.Count, highest = -1;
@@ -192,20 +205,21 @@ namespace PhilsToolbarSorter
             {
                 UIListItem item = list.GetUilistItemAt(i);
                 if (item == null) { complete = false; continue; }
-                Seen s = Meet(item, stockSide, ref appOf);
+                Seen s = Meet(item, stockSide, list, ref appOf);
                 if (s == null) continue;
                 s.List = list;
+                here.Add(s.Id, s.Name);     // new to this scene: on the end
                 KeepOffIfHidden(s);
-                int rank = Setup.Rank(s.Id);
+                int rank = here.Rank(s.Id);
                 if (rank < highest) inOrder = false;
                 else highest = rank;
             }
             // A list with a destroyed button still in it is left alone: moving items
             // makes KSP walk the whole list, and it complains about the dead one.
-            if (!inOrder && complete) PutInOrder(list);
+            if (!inOrder && complete) PutInOrder(list, here);
         }
 
-        Seen Meet(UIListItem item, bool stockSide, ref Func<ApplicationLauncherButton, UIApp> appOf)
+        Seen Meet(UIListItem item, bool stockSide, UIList list, ref Func<ApplicationLauncherButton, UIApp> appOf)
         {
             if (seen.TryGetValue(item, out Seen s) && s.Button != null)
             {
@@ -224,15 +238,15 @@ namespace PhilsToolbarSorter
                 appOf = x => apps.TryGetValue(x, out UIApp a) ? a : null;
             }
             ButtonNames.Identify(b, appOf, out string id, out string name);
-            // Two buttons from the same place in the same mod: number them in KSP's order.
+            // Two buttons from the same place in the same mod, both on the bar: number them
+            // in KSP's order. (A button its mod has just replaced, on its way out, doesn't count.)
             string baseId = id;
-            for (int n = 2; seen.Values.Any(o => o.Id == id && o.Button != null && o.Button != b); n++) id = baseId + "#" + n;
+            for (int n = 2; seen.Values.Any(o => o.Id == id && o.Button != null && o.Button != b && o.List != null && o.List.Contains(o.Item)); n++)
+                id = baseId + "#" + n;
 
-            bool known = Setup.Get(id) != null;
-            Setup.Add(id, name);
-            s = new Seen { Button = b, Item = item, Id = id, Name = name, StockSide = stockSide };
+            s = new Seen { Button = b, Item = item, Id = id, Name = name, StockSide = stockSide, List = list };
             seen[item] = s;
-            Debug.Log($"[PhilsToolbarSorter] {(known ? "Button" : "New button")}: {name} [{id}] ({(stockSide ? "KSP's side" : "mod side")})");
+            Debug.Log($"[PhilsToolbarSorter] Button: {name} [{id}] ({(stockSide ? "KSP's side" : "mod side")})");
             if (HiddenByPlayer(s)) ApplyVisibility(s);
             return s;
         }
@@ -251,11 +265,11 @@ namespace PhilsToolbarSorter
             if (go.activeSelf) go.SetActive(false);                              // a mod switched it on by itself
         }
 
-        void PutInOrder(UIList list)
+        void PutInOrder(UIList list, SceneSetup here)
         {
             var items = new List<UIListItem>();
             for (int i = 0; i < list.Count; i++) items.Add(list.GetUilistItemAt(i));
-            var wanted = items.Select((item, i) => new { item, i, rank = seen.TryGetValue(item, out Seen s) ? Setup.Rank(s.Id) : int.MaxValue })
+            var wanted = items.Select((item, i) => new { item, i, rank = seen.TryGetValue(item, out Seen s) ? here.Rank(s.Id) : int.MaxValue })
                               .OrderBy(x => x.rank).ThenBy(x => x.i).Select(x => x.item).ToList();
             int moved = 0;
             for (int i = 0; i < wanted.Count; i++)
@@ -274,7 +288,7 @@ namespace PhilsToolbarSorter
 
         // ---- Hidden or not -----------------------------------------------------------------
 
-        bool HiddenByPlayer(Seen s) => s.Button != OwnButton && (Setup.Get(s.Id)?.Hidden ?? false);
+        bool HiddenByPlayer(Seen s) => s.Button != OwnButton && (Here?.Get(s.Id)?.Hidden ?? false);
 
         bool HiddenByPlayer(ApplicationLauncherButton b) =>
             b.container != null && seen.TryGetValue(b.container, out Seen s) && s.Button == b && HiddenByPlayer(s);
@@ -316,7 +330,7 @@ namespace PhilsToolbarSorter
                 bool on = s.Button.gameObject.activeSelf, hidden = HiddenByPlayer(s);
                 bool kspWould = kspSays.TryGetValue(s.Button, out bool k) && k;
                 if (!on && !(hidden && (kspWould || s.WasOnBar))) continue;
-                Setup.Entry e = Setup.Get(s.Id);
+                SceneSetup.Entry e = Here?.Get(s.Id);
                 rows.Add(new Row { Seen = s, Hidden = hidden, New = e != null && e.New, Own = s.Button == OwnButton });
             }
             if (Backwards(list, upright)) rows.Reverse();
@@ -345,8 +359,8 @@ namespace PhilsToolbarSorter
 
         public void SetHidden(Seen s, bool hidden)
         {
-            if (s == null || s.Button == OwnButton) return;
-            Setup.SetHidden(s.Id, hidden);
+            if (s == null || s.Button == OwnButton || Here == null) return;
+            Here.SetHidden(s.Id, hidden);
             ApplyVisibility(s);
         }
 
@@ -356,17 +370,18 @@ namespace PhilsToolbarSorter
             if (onScreen == null || onScreen.Count == 0) return;
             List<Seen> rows = onScreen.Where(s => s != null).ToList();
             UIList list = rows[0].List;
-            if (list == null) return;
+            if (list == null || Here == null) return;
             if (Backwards(list, upright)) rows.Reverse();
-            Setup.Reorder(rows.Select(s => s.Id).ToList());
+            Here.Reorder(rows.Select(s => s.Id).ToList());
         }
 
         public void MarkSeen(Seen s)
         {
-            if (s != null) Setup.MarkSeen(s.Id);
+            if (s != null) Here?.MarkSeen(s.Id);
         }
 
-        // Every button met so far (for the in-game check).
+        // Every button met so far, and whether KSP itself would show one here (for the in-game check).
         public IEnumerable<Seen> AllSeen() => seen.Values;
+        public bool KspWouldShow(ApplicationLauncherButton b) => b != null && kspSays.TryGetValue(b, out bool k) && k;
     }
 }

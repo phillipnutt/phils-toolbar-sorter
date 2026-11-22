@@ -285,7 +285,8 @@ namespace PhilsToolbarSorter
 
             int hidden = rows.Count(r => r.Hidden);
             pillText.text = $"<color={Look.Html(Look.Ink)}><b>{hidden}</b></color> hidden";
-            eyebrow.text = $"{SceneName().ToUpperInvariant()}  ·  {rows.Count} BUTTONS";
+            // Which scene's setup this is: what you change here changes only there.
+            eyebrow.text = $"{Setup.DisplayName(Setup.SceneOf(HighLogic.LoadedScene)).ToUpperInvariant()}  ·  {rows.Count} BUTTONS";
             emptyText.text = rows.Count == 0 ? "No toolbar buttons here." : "";
         }
 

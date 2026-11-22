@@ -81,7 +81,7 @@ namespace PhilsToolbarSorter
                 {
                     string name = sn.GetValue("name");
                     if (Scenes.Contains(name) && !setup.scenes.ContainsKey(name))
-                        setup.scenes[name] = SceneSetup.From(name, sn.GetNodes("BUTTON"), startedFresh: false);
+                        setup.scenes[name] = SceneSetup.From(name, sn.GetNodes("BUTTON"), sn.GetNodes("FOLDER"), startedFresh: false);
                 }
                 how = "per scene";
             }
@@ -89,7 +89,7 @@ namespace PhilsToolbarSorter
             {
                 // 0.1.0's single setup: every scene starts as a copy of it.
                 foreach (string name in Scenes)
-                    setup.scenes[name] = SceneSetup.From(name, node.GetNodes("BUTTON"), startedFresh: false);
+                    setup.scenes[name] = SceneSetup.From(name, node.GetNodes("BUTTON"), new ConfigNode[0], startedFresh: false);
                 try { File.Copy(path, path + ".before-per-scene", true); } catch { }
                 setup.dirty = true;
                 how = "copied the one setup from before into each scene";
@@ -140,6 +140,16 @@ namespace PhilsToolbarSorter
         }
     }
 
+    public class Folder
+    {
+        public const string IdPrefix = "Folder:";
+        public static readonly string[] Colors = { "Orange", "Blue", "Green", "Red", "Purple", "Teal", "Pink", "Grey" };
+
+        public string Id, Name = "Folder", Color = "Orange";
+        public bool OpensOnHover = true;
+        public readonly List<string> Members = new List<string>();
+    }
+
     // One scene's setup: its toolbar buttons in KSP's list order (the first sits at the
     // end of each side nearest the divider's right: the right-hand end of a flat bar, the
     // top of the upright one in flight), and which are hidden. A button met here for the
@@ -173,7 +183,7 @@ namespace PhilsToolbarSorter
             return s;
         }
 
-        internal static SceneSetup From(string name, IEnumerable<ConfigNode> buttons, bool startedFresh)
+        internal static SceneSetup From(string name, IEnumerable<ConfigNode> buttons, IEnumerable<ConfigNode> folders, bool startedFresh)
         {
             var s = new SceneSetup { Name = name, startedFresh = startedFresh };
             foreach (ConfigNode b in buttons)
@@ -186,6 +196,22 @@ namespace PhilsToolbarSorter
                 s.entries.Add(new Entry { Id = id, Name = b.GetValue("name") ?? "", Hidden = hidden, New = isNew });
             }
             s.Reindex();
+            foreach (ConfigNode f in folders)
+            {
+                string id = f.GetValue("id");
+                if (string.IsNullOrEmpty(id) || !id.StartsWith(Folder.IdPrefix) || s.FolderById(id) != null) continue;
+                var folder = new Folder
+                {
+                    Id = id,
+                    Name = f.GetValue("name") ?? "Folder",
+                    Color = Folder.Colors.Contains(f.GetValue("color")) ? f.GetValue("color") : Folder.Colors[0],
+                    OpensOnHover = f.GetValue("opens") != "Click",
+                };
+                foreach (string m in f.GetValues("button"))
+                    if (!m.StartsWith(Folder.IdPrefix) && s.FolderOf(m) == null && !folder.Members.Contains(m)) folder.Members.Add(m);
+                s.folders.Add(folder);
+                if (s.Get(id) == null) s.Add(id, folder.Name);
+            }
             return s;
         }
 
@@ -200,7 +226,87 @@ namespace PhilsToolbarSorter
                 b.AddValue("hidden", e.Hidden);
                 if (e.New) b.AddValue("new", true);
             }
+            foreach (Folder f in folders)
+            {
+                ConfigNode n = node.AddNode("FOLDER");
+                n.AddValue("id", f.Id);
+                n.AddValue("name", Safe(f.Name));
+                n.AddValue("color", f.Color);
+                n.AddValue("opens", f.OpensOnHover ? "Hover" : "Click");
+                foreach (string m in f.Members) n.AddValue("button", m);
+            }
             Dirty = false;
+        }
+
+        // ---- Folders --------------------------------------------------------------------------
+        //
+        // A folder is a button of the mod's own on this scene's bar, with its place in the order
+        // like any other. The buttons in it leave the bar and show in a strip that opens from
+        // the folder (on hover or on click). A button can be in one folder at a time; folders
+        // don't go in folders.
+
+        readonly List<Folder> folders = new List<Folder>();
+
+        public IList<Folder> Folders => folders;
+
+        public Folder FolderById(string id) => folders.FirstOrDefault(f => f.Id == id);
+
+        public Folder FolderOf(string buttonId) => buttonId == null ? null : folders.FirstOrDefault(f => f.Members.Contains(buttonId));
+
+        public Folder NewFolder()
+        {
+            int n = 1;
+            while (FolderById(Folder.IdPrefix + n) != null || Get(Folder.IdPrefix + n) != null) n++;
+            var f = new Folder { Id = Folder.IdPrefix + n, Name = "Folder", Color = Folder.Colors[(n - 1) % Folder.Colors.Length] };
+            folders.Add(f);
+            Add(f.Id, f.Name).New = false;
+            Dirty = true;
+            return f;
+        }
+
+        // The folder goes; the buttons in it go back on the bar, in the places they had.
+        public void DeleteFolder(string id)
+        {
+            Folder f = FolderById(id);
+            if (f == null) return;
+            folders.Remove(f);
+            entries.RemoveAll(e => e.Id == id);
+            Reindex();
+            Dirty = true;
+        }
+
+        public void SetFolder(string id, string name = null, string color = null, bool? opensOnHover = null)
+        {
+            Folder f = FolderById(id);
+            if (f == null) return;
+            if (name != null) { f.Name = name.Trim().Length > 0 ? name.Trim() : "Folder"; if (Get(id) != null) Get(id).Name = f.Name; }
+            if (color != null && Folder.Colors.Contains(color)) f.Color = color;
+            if (opensOnHover.HasValue) f.OpensOnHover = opensOnHover.Value;
+            Dirty = true;
+        }
+
+        // Into a folder, at this place among its buttons (shown there, not hidden).
+        public void PutInFolder(string buttonId, string folderId, int index)
+        {
+            Folder f = FolderById(folderId);
+            if (f == null || buttonId == null || buttonId.StartsWith(Folder.IdPrefix)) return;
+            Folder was = FolderOf(buttonId);
+            int at = was == f ? f.Members.IndexOf(buttonId) : -1;
+            was?.Members.Remove(buttonId);
+            if (at >= 0 && at < index) index--;
+            f.Members.Insert(Mathf.Clamp(index, 0, f.Members.Count), buttonId);
+            Entry e = Get(buttonId);
+            if (e != null) { e.Hidden = false; e.New = false; }
+            Dirty = true;
+        }
+
+        // Out of its folder: back on the bar, in the place it had.
+        public void TakeOutOfFolder(string buttonId)
+        {
+            Folder f = FolderOf(buttonId);
+            if (f == null) return;
+            f.Members.Remove(buttonId);
+            Dirty = true;
         }
 
         public Entry Get(string id) => id != null && rank.TryGetValue(id, out int i) ? entries[i] : null;

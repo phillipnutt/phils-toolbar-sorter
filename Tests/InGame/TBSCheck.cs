@@ -115,11 +115,11 @@ public class TBSCheck : MonoBehaviour
         ToolbarSorter.Row hide = mods.First(r => !r.Own && !r.Hidden);
         ToolbarSorter.Row move = mods.Last(r => !r.Own && r != hide);
         W($"Space Center: hiding with the eye {hide.Seen.Name} [{hide.Seen.Id}]; dragging {move.Seen.Name} to the far end");
-        Check(ClickEye(hide.Seen.Name), "eye button found for " + hide.Seen.Name);
+        Check(ClickEye(hide.Seen.Id), "eye button found for " + hide.Seen.Name);
         yield return new WaitForSeconds(0.5f);
         Check(Here.Get(hide.Seen.Id).Hidden, "eye hid " + hide.Seen.Name + " in the Space Center setup");
         Check(!hide.Seen.Button.gameObject.activeSelf, "eye switched off " + hide.Seen.Name + " on the bar");
-        Check(DragRow(move.Seen.Name, 0), "drag rows found");
+        Check(DragRow(move.Seen.Id, 0), "drag rows found");
         yield return new WaitForSeconds(0.5f);
         yield return Shot("ksc-window");
         S.CloseFromWindow();
@@ -156,6 +156,8 @@ public class TBSCheck : MonoBehaviour
         CheckUntouched("VAB", Setup.Editors);
         yield return ChangeHere("VAB");
         CheckScene("VAB, after");
+        yield return FolderSteps();
+        CheckScene("VAB, after folders");
         Remember(Setup.Editors);
         yield return Shot("vab");
 
@@ -208,6 +210,7 @@ public class TBSCheck : MonoBehaviour
         GamePersistence.SaveGame("persistent", SaveName, SaveMode.OVERWRITE);
 
         var save = new ConfigNode("EXPECT");
+        if (wantFolder != null) save.AddValue("folder", wantFolder);
         foreach (string sc in wantOrder.Keys)
         {
             ConfigNode n = save.AddNode("SCENE");
@@ -225,6 +228,7 @@ public class TBSCheck : MonoBehaviour
         yield return new WaitForSeconds(3f);
         W("Phase 2 started. Setup file: " + File.Exists(Setup.FilePath));
         ConfigNode exp = ConfigNode.Load(Path.Combine(Root, "expected.cfg"));
+        wantFolder = exp.GetValue("folder");
         foreach (ConfigNode n in exp.GetNodes("SCENE"))
         {
             string sc = n.GetValue("name");
@@ -250,6 +254,7 @@ public class TBSCheck : MonoBehaviour
         yield return Arrive(GameScenes.EDITOR, 12f);
         Report("relaunch-vab"); CheckScene("VAB after relaunch"); CheckKept("VAB after relaunch", Setup.Editors);
         yield return Shot("relaunch-vab");
+        yield return FolderAfterRelaunch();
         string craft = WriteCraft();
         if (craft != null)
         {
@@ -262,6 +267,144 @@ public class TBSCheck : MonoBehaviour
         yield return Arrive(GameScenes.TRACKSTATION, 12f);
         Report("relaunch-ts"); CheckScene("Tracking Station after relaunch"); CheckKept("Tracking Station after relaunch", Setup.TrackingStation);
         yield return Shot("relaunch-ts");
+    }
+
+    // ---- Folders (VAB) ---------------------------------------------------------------------------
+
+    // Make a folder in the window; name it, color it, switch how it opens; drag a mod button onto it
+    // and put one of KSP's own in through the API; open it on hover (the real buttons move into its
+    // strip) and close it (they go back, off the bar); open and close it on click; take KSP's button
+    // out with its arrow. The folder keeps one button for the relaunch.
+    IEnumerator FolderSteps()
+    {
+        S.Window.Open();
+        yield return new WaitForSeconds(1f);
+        Transform win = UIMasterController.Instance.dialogCanvas.transform.Find("PhilsToolbarSorter");
+        Check(Press(win, "NewFolder"), "window has a New folder button");
+        yield return new WaitForSeconds(1f);
+        Folder f = Here.Folders.FirstOrDefault();
+        Check(f != null, "New folder made a folder in the VAB setup");
+        if (f == null) { S.CloseFromWindow(); yield break; }
+        Check(S.Present(f.Id) != null && S.Present(f.Id).Button.gameObject.activeSelf, $"folder {f.Id} has a button on the bar");
+        Check(RowObject("FolderRow:" + f.Id) != null, "folder has a row in the window");
+        Transform settings = WindowContent()?.Find("FolderSettings");
+        Check(settings != null, "a new folder opens its settings");
+        InputField nameField = settings?.Find("Name")?.GetComponent<InputField>();
+        Check(nameField != null, "settings have a name field");
+        if (nameField != null) { nameField.text = "Settings"; nameField.onEndEdit.Invoke("Settings"); }
+        yield return new WaitForSeconds(0.5f);
+        Check(f.Name == "Settings", $"folder renamed ({f.Name})");
+        Check(Press(WindowContent()?.Find("FolderSettings"), "ColorBlue"), "blue swatch found");
+        yield return new WaitForSeconds(0.5f);
+        Check(f.Color == "Blue", $"folder colored ({f.Color})");
+        Check(Press(WindowContent()?.Find("FolderSettings"), "Click"), "Click choice found");
+        yield return new WaitForSeconds(0.5f);
+        Check(!f.OpensOnHover, "folder opens on click");
+        Check(Press(WindowContent()?.Find("FolderSettings"), "Hover"), "Hover choice found");
+        yield return new WaitForSeconds(0.5f);
+        Check(f.OpensOnHover, "folder opens on hover again");
+
+        // In: a visible mod button by dragging it onto the folder's row; one of KSP's own by the API.
+        List<ToolbarSorter.Row> rows = S.Rows(out bool _);
+        ToolbarSorter.Row a = rows.FirstOrDefault(r => !r.Seen.StockSide && !r.Own && !r.Hidden && r.Folder == null && r.InFolder == null);
+        ToolbarSorter.Row b = rows.FirstOrDefault(r => r.Seen.StockSide && !r.Hidden && r.InFolder == null);
+        Check(a != null && b != null, "a mod button and a KSP button to put in");
+        if (a == null || b == null) { S.CloseFromWindow(); yield break; }
+        folderA = a.Seen.Id;
+        W($"Into folder: {a.Seen.Name} [{a.Seen.Id}] by dragging, {b.Seen.Name} [{b.Seen.Id}] by the API");
+        Check(DragTo("Row:" + a.Seen.Id, "FolderRow:" + f.Id, 18), "dragged a row onto the folder");
+        yield return new WaitForSeconds(0.5f);
+        S.PutInFolder(b.Seen, f, 1);
+        yield return new WaitForSeconds(1f);
+        Check(f.Members.SequenceEqual(new[] { a.Seen.Id, b.Seen.Id }), "folder holds both, in order: " + string.Join(", ", f.Members.ToArray()));
+        Check(!a.Seen.Button.gameObject.activeSelf && !b.Seen.Button.gameObject.activeSelf, "buttons in the folder are off the bar");
+        Check(RowObject("Row:" + a.Seen.Id) != null, "the window shows the folder's buttons under it");
+        yield return Shot("vab-folder-window");
+        S.CloseFromWindow();
+        yield return new WaitForSeconds(0.5f);
+
+        // Open on hover: the real buttons go into the strip, working and on.
+        ApplicationLauncherButton fb = S.Present(f.Id).Button;
+        fb.onHover();
+        yield return new WaitForSeconds(0.5f);
+        Check(S.Folders.IsOpen(f.Id), "hover opens the folder");
+        Transform strip = fb.GetComponentInParent<Canvas>().rootCanvas.transform.Find("PhilsToolbarSorterFolder");
+        Check(strip != null, "the folder's strip is on screen");
+        Check(S.Folders.IsLent(a.Seen.Item) && S.Folders.IsLent(b.Seen.Item), "both buttons are in the strip");
+        Check(a.Seen.Button.gameObject.activeInHierarchy && b.Seen.Button.gameObject.activeInHierarchy, "both buttons show in the strip");
+        Check(strip != null && a.Seen.Item.transform.IsChildOf(strip), "the strip holds the real button");
+        Check(a.Seen.List.Contains(a.Seen.Item) && b.Seen.List.Contains(b.Seen.Item), "KSP still lists both buttons as its own");
+        CheckScene("VAB, folder open");
+        yield return Shot("vab-folder-open");
+        fb.onHoverOut();
+        yield return new WaitForSeconds(1f);
+        Check(!S.Folders.IsOpen(f.Id), "moving away closes the folder");
+        Check(!S.Folders.IsLent(a.Seen.Item) && a.Seen.Item.transform.parent == a.Seen.List.ListAnchor, "the button is back in its place on the bar");
+        Check(!a.Seen.Button.gameObject.activeSelf && !b.Seen.Button.gameObject.activeSelf, "and off the bar again");
+        CheckScene("VAB, folder closed");
+
+        // Open and close on click.
+        S.SetFolder(f, opensOnHover: false);
+        fb.SetTrue(true);
+        yield return new WaitForSeconds(0.5f);
+        Check(S.Folders.IsOpen(f.Id), "a click folder opens on click");
+        fb.SetFalse(true);
+        yield return new WaitForSeconds(0.5f);
+        Check(!S.Folders.IsOpen(f.Id), "and closes on the next click");
+        S.SetFolder(f, opensOnHover: true);
+
+        // Take KSP's button out with its arrow in the window.
+        S.Window.Open();
+        yield return new WaitForSeconds(1f);
+        Check(Press(RowObject("Row:" + b.Seen.Id), "Out"), "the arrow on a button in a folder");
+        yield return new WaitForSeconds(1f);
+        Check(f.Members.SequenceEqual(new[] { a.Seen.Id }), "taken out: the folder keeps one");
+        Check(b.Seen.Button.gameObject.activeSelf, "the button taken out is back on the bar");
+        S.CloseFromWindow();
+        yield return new WaitForSeconds(0.5f);
+        wantFolder = $"{f.Id}|{f.Name}|{f.Color}|{f.OpensOnHover}|{string.Join(",", f.Members.ToArray())}";
+        W("Folder kept for the relaunch: " + wantFolder);
+    }
+
+    string folderA, wantFolder;
+
+    // After the relaunch: the folder is there as it was, opens, closes, and deletes (its button
+    // going back on the bar).
+    IEnumerator FolderAfterRelaunch()
+    {
+        Folder f = Here.Folders.FirstOrDefault();
+        string now = f == null ? "none" : $"{f.Id}|{f.Name}|{f.Color}|{f.OpensOnHover}|{string.Join(",", f.Members.ToArray())}";
+        Check(wantFolder != null && now == wantFolder, $"after relaunch the folder is as it was ({now})");
+        if (f == null) yield break;
+        foreach (string sc in new[] { Setup.SpaceCenter, Setup.Flight, Setup.TrackingStation })
+            Check(S.Setup.For(sc).Folders.Count == 0, $"{Setup.DisplayName(sc)} has no folders");
+        ToolbarSorter.Seen a = S.Present(f.Members.FirstOrDefault());
+        Check(a != null && !a.Button.gameObject.activeSelf, "its button is off the bar");
+        ApplicationLauncherButton fb = S.Present(f.Id)?.Button;
+        Check(fb != null, "the folder's button is on the bar");
+        if (fb == null || a == null) yield break;
+        fb.onHover();
+        yield return new WaitForSeconds(0.5f);
+        Check(S.Folders.IsOpen(f.Id) && S.Folders.IsLent(a.Item) && a.Button.gameObject.activeInHierarchy, "it opens with its button in it");
+        yield return Shot("relaunch-vab-folder-open");
+        fb.onHoverOut();
+        yield return new WaitForSeconds(1f);
+        Check(!S.Folders.IsOpen(f.Id) && !a.Button.gameObject.activeSelf, "and closes");
+
+        S.Window.Open();
+        yield return new WaitForSeconds(1f);
+        Check(Press(RowObject("FolderRow:" + f.Id), "Edit"), "the folder's pencil");
+        yield return new WaitForSeconds(0.5f);
+        Check(Press(WindowContent()?.Find("FolderSettings"), "Delete"), "Delete folder");
+        yield return new WaitForSeconds(0.5f);
+        Check(Press(WindowContent()?.Find("FolderSettings"), "DeleteNow"), "Delete, asked first");
+        yield return new WaitForSeconds(1f);
+        Check(Here.Folders.Count == 0, "folder deleted");
+        Check(a.Button.gameObject.activeSelf, "its button is back on the bar");
+        Check(S.Present(f.Id) == null, "the folder's button is gone from the bar");
+        S.CloseFromWindow();
+        yield return new WaitForSeconds(0.5f);
+        CheckScene("VAB after deleting the folder");
     }
 
     // ---- Phase "icons": the toolbar at the Space Center and in the VAB, nothing changed ------------
@@ -376,7 +519,7 @@ public class TBSCheck : MonoBehaviour
             bool ordered = true;
             for (int k = 1; k < ranks.Count; k++) if (ranks[k] < ranks[k - 1]) ordered = false;
             Check(ordered, $"{where}: {name} list follows this scene's setup ({items.Count} buttons)");
-            var shown = items.Where(i => i.gameObject.activeInHierarchy).ToList();
+            var shown = items.Where(i => i.gameObject.activeInHierarchy && !S.Folders.IsLent(i)).ToList();
             var steps = new List<float>();
             for (int k = 1; k < shown.Count; k++)
             {
@@ -389,8 +532,13 @@ public class TBSCheck : MonoBehaviour
         var here = S.AllSeen().Where(x => x.Button != null && x.List != null && x.List.Contains(x.Item)).ToList();
         var stuckOn = here.Where(x => x.Button != S.OwnButton && Here.Get(x.Id) != null && Here.Get(x.Id).Hidden && x.Button.gameObject.activeSelf).Select(x => x.Name).ToList();
         Check(stuckOn.Count == 0, $"{where}: buttons hidden here are off" + (stuckOn.Count > 0 ? " (on: " + string.Join(", ", stuckOn.ToArray()) + ")" : ""));
-        var stuckOff = here.Where(x => S.KspWouldShow(x.Button) && !(Here.Get(x.Id)?.Hidden ?? false) && !x.Button.gameObject.activeSelf).Select(x => x.Name).ToList();
+        var stuckOff = here.Where(x => S.KspWouldShow(x.Button) && !(Here.Get(x.Id)?.Hidden ?? false) && Here.FolderOf(x.Id) == null && !x.Button.gameObject.activeSelf).Select(x => x.Name).ToList();
         Check(stuckOff.Count == 0, $"{where}: buttons not hidden here are on" + (stuckOff.Count > 0 ? " (off: " + string.Join(", ", stuckOff.ToArray()) + ")" : ""));
+        var inFolders = here.Where(x => Here.FolderOf(x.Id) != null && !S.Folders.IsLent(x.Item)).ToList();
+        if (inFolders.Count > 0)
+            Check(inFolders.All(x => !x.Button.gameObject.activeSelf), $"{where}: buttons in folders are off the bar ({inFolders.Count})");
+        foreach (Folder f in Here.Folders)
+            Check(S.Present(f.Id) != null && (S.Present(f.Id).Button.gameObject.activeSelf || Here.Get(f.Id).Hidden), $"{where}: folder {f.Name} has its button on the bar");
         Check(S.OwnButton != null && S.OwnButton.gameObject.activeSelf, $"{where}: this mod's own button shows");
         List<ToolbarSorter.Row> rows = S.Rows(out bool _);
         var byPicture = rows.Where(r => r.Seen.Id.StartsWith("Icon:")).Select(r => r.Seen.Name + " [" + r.Seen.Id + "]").ToList();
@@ -404,6 +552,7 @@ public class TBSCheck : MonoBehaviour
         SceneSetup s = S.Setup.For(scene);
         Check(s.Order().Take(startOrder[scene].Count).SequenceEqual(startOrder[scene]), $"{where}: this scene's order is as it was at the start");
         Check(new HashSet<string>(s.Hidden()).SetEquals(startHidden[scene]), $"{where}: this scene hides what it did at the start ({startHidden[scene].Count})");
+        Check(s.Folders.Count == 0, $"{where}: no folders from other scenes ({s.Folders.Count})");
     }
 
     // After this scene's changes: remember its order and hidden buttons, for later visits and the relaunch.
@@ -463,42 +612,54 @@ public class TBSCheck : MonoBehaviour
         return w != null ? w.Find("List/Viewport/Content") : null;
     }
 
+    // The window names each row after the button it stands for: "Row:<id>", "FolderRow:<folder id>".
+    RectTransform RowObject(string objName)
+    {
+        Transform c = WindowContent();
+        return c != null ? c.Find(objName) as RectTransform : null;
+    }
+
     List<RectTransform> RowObjects()
     {
         Transform c = WindowContent();
         var r = new List<RectTransform>();
         if (c == null) return r;
-        foreach (Transform t in c) if (t.name == "Row") r.Add((RectTransform)t);
+        foreach (Transform t in c) if (t.name.StartsWith("Row:")) r.Add((RectTransform)t);
         return r;
     }
 
-    static string RowName(RectTransform row) => row.Find("Name")?.GetComponent<Text>()?.text;
-
-    bool ClickEye(string name)
+    bool Press(Transform parent, string path)
     {
-        RectTransform row = RowObjects().FirstOrDefault(r => RowName(r) == name);
-        Button eye = row != null ? row.Find("Eye")?.GetComponent<Button>() : null;
-        if (eye == null) return false;
-        eye.onClick.Invoke();
+        Button b = parent != null ? parent.Find(path)?.GetComponent<Button>() : null;
+        if (b == null) return false;
+        b.onClick.Invoke();
         return true;
     }
 
-    // Drags the named row and drops it on the upper half of row number `before` (in window order).
-    bool DragRow(string name, int before)
+    bool ClickEye(string id) => Press(RowObject("Row:" + id), "Eye");
+
+    // Drags a row and drops it onto another row, this far down it (5: the upper edge; 18: the middle).
+    bool DragTo(string fromObj, string ontoObj, float down)
     {
-        List<RectTransform> rows = RowObjects();
-        RectTransform row = rows.FirstOrDefault(r => RowName(r) == name);
-        if (row == null || before >= rows.Count) return false;
+        RectTransform row = RowObject(fromObj), onto = RowObject(ontoObj);
+        if (row == null || onto == null) return false;
         Canvas canvas = row.GetComponentInParent<Canvas>();
         Camera cam = canvas.rootCanvas.renderMode != RenderMode.ScreenSpaceOverlay ? canvas.rootCanvas.worldCamera : null;
         Vector2 start = RectTransformUtility.WorldToScreenPoint(cam, row.TransformPoint(new Vector3(40, -18, 0)));
-        Vector2 drop = RectTransformUtility.WorldToScreenPoint(cam, rows[before].TransformPoint(new Vector3(40, -5, 0)));
+        Vector2 drop = RectTransformUtility.WorldToScreenPoint(cam, onto.TransformPoint(new Vector3(40, -down, 0)));
         var e = new PointerEventData(EventSystem.current) { button = PointerEventData.InputButton.Left, position = start, pressPosition = start };
         ExecuteEvents.Execute(row.gameObject, e, ExecuteEvents.beginDragHandler);
         e.position = drop;
         ExecuteEvents.Execute(row.gameObject, e, ExecuteEvents.dragHandler);
         ExecuteEvents.Execute(row.gameObject, e, ExecuteEvents.endDragHandler);
         return true;
+    }
+
+    // Drags a button's row to just before the first top-level row in the window.
+    bool DragRow(string id, int before)
+    {
+        List<RectTransform> rows = RowObjects();
+        return before < rows.Count && DragTo("Row:" + id, rows[before].name, 5);
     }
 
     // ---- Small things --------------------------------------------------------------------------

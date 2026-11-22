@@ -40,6 +40,7 @@ namespace PhilsToolbarSorter
         // The setup for the scene KSP is in now (none at the main menu).
         public SceneSetup Here => Setup?.For(Setup.SceneOf(HighLogic.LoadedScene));
         public SorterWindow Window { get; private set; }
+        public FolderBar Folders { get; private set; }
         public ApplicationLauncherButton OwnButton { get; private set; }
 
         // A toolbar button the mod has met, by the list item KSP keeps it in.
@@ -58,6 +59,8 @@ namespace PhilsToolbarSorter
         {
             public Seen Seen;
             public bool Hidden, New, Own;
+            public Folder Folder;       // this row is a folder
+            public Folder InFolder;     // this row's button is in a folder
         }
 
         const ApplicationLauncher.AppScenes OwnScenes =
@@ -76,6 +79,7 @@ namespace PhilsToolbarSorter
             Instance = this;
             DontDestroyOnLoad(gameObject);
             Setup = Setup.Load();
+            Folders = new FolderBar(this);
             Window = new SorterWindow(this);
             Patch();
             GameEvents.onGUIApplicationLauncherReady.Add(AddOwnButton);
@@ -125,6 +129,7 @@ namespace PhilsToolbarSorter
         void OnSceneLeaving(GameScenes next)
         {
             Window.Close();
+            Folders.RemoveAll();
             if (OwnButton != null && ApplicationLauncher.Instance != null) ApplicationLauncher.Instance.RemoveModApplication(OwnButton);
             OwnButton = null;
             kspSays.Clear();
@@ -172,6 +177,7 @@ namespace PhilsToolbarSorter
             {
                 ApplauncherLayout layout = ApplicationLauncher.Instance != null ? ApplicationLauncher.Instance.CurrentLayout : null;
                 SceneSetup here = Here;
+                Folders.Tend(layout != null ? here : null, Setup.SceneOf(HighLogic.LoadedScene));
                 if (layout != null && here != null)
                 {
                     // Into a scene with its own setup: buttons that stay on the bar from the
@@ -215,8 +221,9 @@ namespace PhilsToolbarSorter
                 else highest = rank;
             }
             // A list with a destroyed button still in it is left alone: moving items
-            // makes KSP walk the whole list, and it complains about the dead one.
-            if (!inOrder && complete) PutInOrder(list, here);
+            // makes KSP walk the whole list, and it complains about the dead one. So is a
+            // side with a button lent to an open folder (KSP's moves would take it back).
+            if (!inOrder && complete && !Folders.AnyLentFrom(list)) PutInOrder(list, here);
         }
 
         Seen Meet(UIListItem item, bool stockSide, UIList list, ref Func<ApplicationLauncherButton, UIApp> appOf)
@@ -237,7 +244,13 @@ namespace PhilsToolbarSorter
                     if (app != null && app.appLauncherButton != null) apps[app.appLauncherButton] = app;
                 appOf = x => apps.TryGetValue(x, out UIApp a) ? a : null;
             }
-            ButtonNames.Identify(b, appOf, out string id, out string name);
+            string id, name;
+            if (Folders.IsFolderButton(b, out string folderId))
+            {
+                id = folderId;
+                name = Here?.FolderById(folderId)?.Name ?? "Folder";
+            }
+            else ButtonNames.Identify(b, appOf, out id, out name);
             // Two buttons from the same place in the same mod, both on the bar: number them
             // in KSP's order. (A button its mod has just replaced, on its way out, doesn't count.)
             string baseId = id;
@@ -254,7 +267,7 @@ namespace PhilsToolbarSorter
         void KeepOffIfHidden(Seen s)
         {
             GameObject go = s.Button.gameObject;
-            if (!go.activeSelf) return;
+            if (!go.activeSelf || Folders.IsLent(s.Item)) return;
             if (!HiddenByPlayer(s))
             {
                 s.WasOnBar = true;
@@ -288,13 +301,19 @@ namespace PhilsToolbarSorter
 
         // ---- Hidden or not -----------------------------------------------------------------
 
-        bool HiddenByPlayer(Seen s) => s.Button != OwnButton && (Here?.Get(s.Id)?.Hidden ?? false);
+        // Off the bar: hidden with the eye, or in a folder (unless lent to its open strip).
+        bool HiddenByPlayer(Seen s)
+        {
+            SceneSetup here = Here;
+            if (here == null || s.Button == OwnButton || Folders.IsLent(s.Item)) return false;
+            return (here.Get(s.Id)?.Hidden ?? false) || here.FolderOf(s.Id) != null;
+        }
 
         bool HiddenByPlayer(ApplicationLauncherButton b) =>
             b.container != null && seen.TryGetValue(b.container, out Seen s) && s.Button == b && HiddenByPlayer(s);
 
         // Let KSP decide again whether the button shows (the postfix adds the player's say).
-        void ApplyVisibility(Seen s)
+        internal void ApplyVisibility(Seen s)
         {
             if (s.Button == null) return;
             if (patched) s.Button.VisibleInScenes = s.Button.VisibleInScenes;
@@ -327,11 +346,15 @@ namespace PhilsToolbarSorter
             {
                 UIListItem item = list.GetUilistItemAt(i);
                 if (item == null || !seen.TryGetValue(item, out Seen s) || s.Button == null) continue;
-                bool on = s.Button.gameObject.activeSelf, hidden = HiddenByPlayer(s);
+                bool on = s.Button.gameObject.activeSelf, off = HiddenByPlayer(s);
                 bool kspWould = kspSays.TryGetValue(s.Button, out bool k) && k;
-                if (!on && !(hidden && (kspWould || s.WasOnBar))) continue;
+                if (!on && !(off && (kspWould || s.WasOnBar))) continue;
                 SceneSetup.Entry e = Here?.Get(s.Id);
-                rows.Add(new Row { Seen = s, Hidden = hidden, New = e != null && e.New, Own = s.Button == OwnButton });
+                rows.Add(new Row
+                {
+                    Seen = s, Hidden = e != null && e.Hidden, New = e != null && e.New, Own = s.Button == OwnButton,
+                    Folder = Here?.FolderById(s.Id), InFolder = Here?.FolderOf(s.Id),
+                });
             }
             if (Backwards(list, upright)) rows.Reverse();
             return rows;
@@ -340,13 +363,13 @@ namespace PhilsToolbarSorter
         // Whether KSP's list runs against reading order on screen. It runs from the
         // right-hand end of a flat bar and from the top of an upright one; measured
         // from the first and last buttons showing, where there are two.
-        static bool Backwards(UIList list, bool upright)
+        bool Backwards(UIList list, bool upright)
         {
             UIListItem first = null, last = null;
             for (int i = 0; i < list.Count; i++)
             {
                 UIListItem item = list.GetUilistItemAt(i);
-                if (item == null || !item.gameObject.activeInHierarchy) continue;
+                if (item == null || !item.gameObject.activeInHierarchy || Folders.IsLent(item)) continue;
                 if (first == null) first = item;
                 last = item;
             }
@@ -378,6 +401,56 @@ namespace PhilsToolbarSorter
         public void MarkSeen(Seen s)
         {
             if (s != null) Here?.MarkSeen(s.Id);
+        }
+
+        // ---- Folders (from the window) -----------------------------------------------------------
+
+        // A button on the bar in this scene, by its id.
+        public Seen Present(string id) =>
+            seen.Values.FirstOrDefault(s => s.Id == id && s.Button != null && s.List != null && s.List.Contains(s.Item));
+
+        // A new folder in this scene: its button appears at the far end of the mod side.
+        public Folder NewFolder()
+        {
+            Folder f = Here?.NewFolder();
+            if (f != null) Debug.Log($"[PhilsToolbarSorter] New folder {f.Id} in {Setup.DisplayName(Here.Name)}.");
+            return f;
+        }
+
+        // The folder goes; its buttons go back on the bar where they were.
+        public void DeleteFolder(Folder f)
+        {
+            if (f == null || Here == null) return;
+            Folders.CloseAll();
+            var members = f.Members.ToList();
+            Here.DeleteFolder(f.Id);
+            foreach (string id in members) { Seen s = Present(id); if (s != null) ApplyVisibility(s); }
+        }
+
+        public void SetFolder(Folder f, string name = null, string color = null, bool? opensOnHover = null)
+        {
+            if (f == null || Here == null) return;
+            Here.SetFolder(f.Id, name, color, opensOnHover);
+            Seen s = Present(f.Id);
+            if (s != null) s.Name = f.Name;
+        }
+
+        // Into a folder at this place among its buttons (this window's own button stays on the bar).
+        public void PutInFolder(Seen s, Folder f, int index)
+        {
+            if (s == null || f == null || Here == null || s.Button == OwnButton || Here.FolderById(s.Id) != null) return;
+            Folders.CloseAll();
+            Here.PutInFolder(s.Id, f.Id, index);
+            ApplyVisibility(s);
+        }
+
+        // Out of its folder: back on the bar where it was.
+        public void TakeOutOfFolder(Seen s)
+        {
+            if (s == null || Here == null) return;
+            Folders.CloseAll();
+            Here.TakeOutOfFolder(s.Id);
+            ApplyVisibility(s);
         }
 
         // Every button met so far, and whether KSP itself would show one here (for the in-game check).

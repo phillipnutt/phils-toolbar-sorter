@@ -26,12 +26,54 @@ namespace PhilsToolbarSorter
         public static string Html(Color c) => "#" + ColorUtility.ToHtmlStringRGB(c);
 
         public static Font Display, Body;
-        public static Texture2D Eye, EyeSlash, Cross, Grip, Logo, ToolbarIcon, Dash;
+        public static Texture2D Eye, EyeSlash, Cross, Grip, Logo, ToolbarIcon, Dash, Pencil, ChevronRight, ChevronDown, Plus, TakeOut, FolderGlyph;
 
-        // KSP's toolbar button grey, for the icon tiles in the list.
-        public static readonly Color KspButton = Hex(0x404040);
+        // KSP's toolbar button grey, for the icon tiles in the list; its bar's darker grey, for folder strips.
+        public static readonly Color KspButton = Hex(0x404040), KspBar = Hex(0x2b2d31);
         // The divider's red, as on KSP's own bar.
         public static readonly Color DividerRed = Hex(0xd8562e);
+
+        // Folder colors, by the names the setup file uses.
+        static readonly Dictionary<string, Color> folderColors = new Dictionary<string, Color>
+        {
+            { "Orange", Hex(0xffa62b) }, { "Blue", Hex(0x4aa3ff) }, { "Green", Hex(0x62d595) }, { "Red", Hex(0xff6b6b) },
+            { "Purple", Hex(0xb48cff) }, { "Teal", Hex(0x3fd0c9) }, { "Pink", Hex(0xff86c8) }, { "Grey", Hex(0xa9b3c6) },
+        };
+
+        public static Color FolderColor(string name) => name != null && folderColors.TryGetValue(name, out Color c) ? c : Amber;
+
+        static readonly Dictionary<string, Texture2D> folderIcons = new Dictionary<string, Texture2D>();
+
+        // A folder in that color, 76 px like the mod's toolbar icon: a back with a tab, a front
+        // a little lighter, and a dark line where the front's top edge meets the back.
+        public static Texture2D FolderIcon(string name)
+        {
+            if (folderIcons.TryGetValue(name ?? "", out Texture2D t) && t != null) return t;
+            Color front = FolderColor(name), back = Color.Lerp(front, Color.black, 0.28f), edge = Color.Lerp(front, Color.black, 0.55f);
+            const int size = 76;
+            float pixel = 2f / size;
+            t = Make(size, size, (x, y) =>
+            {
+                var p = new Vector2((x + 0.5f) * pixel - 1, (y + 0.5f) * pixel - 1);
+                float tab = RoundRect(p, new Vector2(-0.42f, 0.44f), 0.3f, 0.12f, 0.07f);
+                float backBody = RoundRect(p, new Vector2(0, 0.02f), 0.78f, 0.44f, 0.09f);
+                float frontBody = RoundRect(p, new Vector2(0, -0.12f), 0.8f, 0.36f, 0.09f);
+                float aBack = Mathf.Clamp01(0.5f - Mathf.Min(tab, backBody) / pixel);
+                float aFront = Mathf.Clamp01(0.5f - frontBody / pixel);
+                float aEdge = Mathf.Clamp01(0.5f - (Mathf.Abs(frontBody) - 0.035f) / pixel) * (p.y > -0.12f ? 1 : 0);
+                Color c = back;
+                c = Color.Lerp(c, front, aFront);
+                c = Color.Lerp(c, edge, aEdge * aFront);
+                return new Color(c.r, c.g, c.b, Mathf.Max(aBack, aFront));
+            });
+            return folderIcons[name ?? ""] = t;
+        }
+
+        static float RoundRect(Vector2 p, Vector2 c, float hx, float hy, float r)
+        {
+            Vector2 q = new Vector2(Mathf.Abs(p.x - c.x) - (hx - r), Mathf.Abs(p.y - c.y) - (hy - r));
+            return new Vector2(Mathf.Max(q.x, 0), Mathf.Max(q.y, 0)).magnitude + Mathf.Min(Mathf.Max(q.x, q.y), 0) - r;
+        }
 
         static bool ready;
         static readonly Dictionary<string, Sprite> rounds = new Dictionary<string, Sprite>();
@@ -62,6 +104,17 @@ namespace PhilsToolbarSorter
                     for (int r = 0; r < 3; r++) d = Mathf.Min(d, Circle(p, new Vector2(c == 0 ? -0.3f : 0.3f, 0.6f - r * 0.6f), 0.17f));
                 return d;
             });
+
+            // Folder controls: edit, open/closed, new, take a button out of its folder.
+            Pencil = Glyph(32, p => Min(Segment(p, new Vector2(-0.55f, -0.55f), new Vector2(0.45f, 0.45f)) - 0.14f,
+                                        Segment(p, new Vector2(-0.72f, -0.72f), new Vector2(-0.6f, -0.6f)) - 0.08f));
+            ChevronRight = Glyph(24, p => Min(Segment(p, new Vector2(-0.25f, 0.55f), new Vector2(0.3f, 0)), Segment(p, new Vector2(0.3f, 0), new Vector2(-0.25f, -0.55f))) - 0.11f);
+            ChevronDown = Glyph(24, p => Min(Segment(p, new Vector2(-0.55f, 0.25f), new Vector2(0, -0.3f)), Segment(p, new Vector2(0, -0.3f), new Vector2(0.55f, 0.25f))) - 0.11f);
+            Plus = Glyph(24, p => Min(Segment(p, new Vector2(-0.6f, 0), new Vector2(0.6f, 0)), Segment(p, new Vector2(0, -0.6f), new Vector2(0, 0.6f))) - 0.12f);
+            TakeOut = Glyph(32, p => Min(Min(Segment(p, new Vector2(-0.5f, 0.5f), new Vector2(0.5f, -0.5f)),
+                                             Segment(p, new Vector2(-0.5f, 0.5f), new Vector2(0.05f, 0.5f))),
+                                         Segment(p, new Vector2(-0.5f, 0.5f), new Vector2(-0.5f, -0.05f))) - 0.11f);
+            FolderGlyph = Glyph(32, p => Mathf.Min(RoundRect(p, new Vector2(-0.38f, 0.42f), 0.3f, 0.12f, 0.06f), RoundRect(p, new Vector2(0, -0.06f), 0.8f, 0.48f, 0.08f)));
 
             // The window's title-bar mark: three buttons in a row, the middle one lifted out in orange.
             Logo = Mark(48, Color.Lerp(Ink3, Ink2, 0.3f), Amber, false);

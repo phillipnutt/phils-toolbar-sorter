@@ -37,7 +37,7 @@ public class TBSCheck : MonoBehaviour
         DontDestroyOnLoad(gameObject);
         log = new StreamWriter(Path.Combine(Root, "results-phase" + phase + ".log"), false) { AutoFlush = true };
         Application.logMessageReceived += OnLog;
-        StartCoroutine(Guarded(phase == "2" ? Phase2() : Phase1()));
+        StartCoroutine(Guarded(phase == "icons" ? PhaseIcons() : phase == "2" ? Phase2() : Phase1()));
     }
 
     void OnLog(string cond, string stack, LogType type)
@@ -218,6 +218,45 @@ public class TBSCheck : MonoBehaviour
         yield return Arrive(GameScenes.TRACKSTATION, 12f);
         Report("relaunch-ts"); CheckScene("Tracking Station after relaunch"); CheckKept("Tracking Station after relaunch");
         yield return Shot("relaunch-ts");
+    }
+
+    // ---- Phase "icons": the toolbar at the Space Center and in the VAB, nothing changed ------------
+
+    IEnumerator PhaseIcons()
+    {
+        const string save = "zz_TBSIcons";
+        yield return new WaitForSeconds(3f);
+        W("Icons check started. Sorter present: " + (S != null));
+        GameParameters gp = GameParameters.GetDefaultParameters(Game.Modes.SANDBOX, GameParameters.Preset.Normal);
+        Game g = GamePersistence.CreateNewGame(save, Game.Modes.SANDBOX, gp, "Squad/Flags/default", GameScenes.SPACECENTER, EditorFacility.VAB);
+        HighLogic.CurrentGame = g;
+        HighLogic.SaveFolder = save;
+        g.startScene = GameScenes.SPACECENTER;
+        g.Start();
+        W("Created sandbox save " + save);
+
+        yield return Arrive(GameScenes.SPACECENTER, 14f);
+        IconReport("Space Center");
+        yield return Shot("icons-ksc");
+        GamePersistence.SaveGame("persistent", save, SaveMode.OVERWRITE);
+        EditorDriver.StartEditor(EditorFacility.VAB);
+        yield return Arrive(GameScenes.EDITOR, 12f);
+        IconReport("VAB");
+        yield return Shot("icons-vab");
+    }
+
+    // Each mod button on the bar, its picture's name and size; this mod's own icon read from its file.
+    void IconReport(string where)
+    {
+        Report(where);
+        foreach (ToolbarSorter.Row r in S.Rows(out bool _).Where(x => !x.Seen.StockSide))
+        {
+            Texture t = r.Seen.Button.sprite != null ? r.Seen.Button.sprite.texture : null;
+            W($"  icon: {r.Seen.Name} -> '{(t != null ? t.name : "none")}' {(t != null ? t.width + "x" + t.height : "")}");
+        }
+        Texture own = S.OwnButton != null && S.OwnButton.sprite != null ? S.OwnButton.sprite.texture : null;
+        Check(own != null && own.width == 76 && own.height == 76, $"{where}: own toolbar icon is the 76 px file ({(own != null ? own.width + "x" + own.height : "none")})");
+        Check(S.OwnButton != null && S.OwnButton.gameObject.activeInHierarchy, $"{where}: own button on the bar");
     }
 
     // ---- Checks --------------------------------------------------------------------------------

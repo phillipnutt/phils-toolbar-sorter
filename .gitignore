@@ -1,0 +1,15 @@
+bin/
+obj/
+*.user
+.vs/
+# Built at release time, not committed.
+GameData/PhilsToolbarSorter/Plugins/*.dll
+# Each player's own setup.
+GameData/PhilsToolbarSorter/PluginData/
+# Release zips.
+*.zip
+
+# In-game check output.
+Tests/InGame/bin/
+Tests/InGame/obj/
+Tests/InGame/out/
